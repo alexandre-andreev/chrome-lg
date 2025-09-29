@@ -113,6 +113,9 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 async def chat_stream(payload: ChatRequest):
     if not (os.getenv("STREAMING_ENABLED") or "").lower() in ("1", "true", "yes"):
         raise HTTPException(status_code=403, detail="Streaming is disabled")
+    # Require Gemini key for streaming; without it, instruct client to fall back to /chat
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=403, detail="Streaming requires GEMINI_API_KEY")
 
     user_message = (payload.message or "").strip()
     if not user_message:

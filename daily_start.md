@@ -7,10 +7,21 @@ cd D:\_project\Chrome-lg\backend_lg
 py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# 3) Установить зависимости (один раз; при обновлении - повторить)
-pip install -r .\requirements.txt
+# в linux:
+```
+source .venv/bin/activate
 ```
 
+# 3) Установить зависимости (один раз; при обновлении - повторить)
+```
+pip install -r .\requirements.txt
+
+```
+#linux (строго в каталоге backend_lg)
+
+```
+pip install -r ./requirements.txt
+```
 ### Переменные среды (на текущую сессию PowerShell)
 ```powershell
 # Ключи
@@ -32,7 +43,14 @@ $env:EXA_CACHE_DISABLED="1"
 ```powershell
 # (из папки D:\_project\Chrome-lg\backend_lg, venv активирован)
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+
 ```
+# для запуска в linux
+
+```
+./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+```
+
 
 ### Быстрые проверки
 ```powershell

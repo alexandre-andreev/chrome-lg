@@ -2,6 +2,16 @@ from typing import TypedDict, Optional, List, Dict, Any
 import re
 import os
 import logging
+# Ensure env is loaded early so visualization flags are available on import
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env.local'))
+except Exception:
+    try:
+        from dotenv import load_dotenv  # type: ignore
+        load_dotenv()
+    except Exception:
+        pass
 # module logger
 logger = logging.getLogger(__name__)
 from langgraph.graph import StateGraph, END
@@ -37,14 +47,48 @@ class AgentState(TypedDict, total=False):
     search_attempts: Optional[int]
 
 
+# Feature flags and tunables (env)
+_HEURISTICS_FLAG = (os.environ.get("LG_SEARCH_HEURISTICS") or "").lower() in ("1", "true", "yes", "debug")
+LG_CHUNK_SIZE = int(os.environ.get("LG_CHUNK_SIZE", "3500"))
+LG_CHUNK_OVERLAP = int(os.environ.get("LG_CHUNK_OVERLAP", "150"))
+LG_CHUNK_MIN_TOTAL = int(os.environ.get("LG_CHUNK_MIN_TOTAL", "0"))  # if >0 overrides 2*LG_CHUNK_SIZE
+LG_NOTES_MAX = int(os.environ.get("LG_NOTES_MAX", "12"))
+LG_CHUNK_NOTES_MAX_CHUNKS = int(os.environ.get("LG_CHUNK_NOTES_MAX_CHUNKS", "6"))
+LG_SEARCH_MIN_CONTEXT_CHARS = int(os.environ.get("LG_SEARCH_MIN_CONTEXT_CHARS", "1000"))
+LG_PROMPT_TEXT_CHARS = int(os.environ.get("LG_PROMPT_TEXT_CHARS", "4000"))
+LG_EXA_TIME_BUDGET_S = float(os.environ.get("LG_EXA_TIME_BUDGET_S", "2.5"))
+
 def prepare_context(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("prepare_context")
     state["graph_trace"] = trace
     page = state.get("page") or {}
     txt = (page.get("text") or "")
-    # Увеличим лимит для первичной передачи
-    page["text"] = txt[:24000]
+    # Лёгкая очистка текста страницы от служебных строк/навигации/шапок
+    try:
+        lines = [l.strip() for l in txt.splitlines()]
+        cleaned: List[str] = []
+        drop_patterns = [
+            r"^перейти к навигации$", r"^перейти к поиску$", r"^содержание$",
+            r"^править код$", r"^узнать больше$", r"^материал из.*википедии$",
+            r"^вики любит памятники.*$",
+        ]
+        import re as _re
+        for l in lines:
+            low = l.lower()
+            if not l:
+                continue
+            # короткие однословные служебные строки
+            if len(l) <= 2:
+                continue
+            if any(_re.match(p, low) for p in drop_patterns):
+                continue
+            cleaned.append(l)
+        txt = "\n".join(cleaned)
+    except Exception:
+        pass
+    # Усечём для последующего промпта (будут приоритетны focus/notes)
+    page["text"] = txt[:20000]
     state["page"] = page
     # Инициализации
     state.setdefault("graph_trace", [])
@@ -71,7 +115,8 @@ def _chunk_text(text: str, chunk_size: int = 4000, overlap: int = 200) -> List[s
 
 def need_chunk(state: AgentState) -> str:
     txt = (state.get("page", {}).get("text") or "")
-    if len(txt) > 6000:
+    threshold = LG_CHUNK_MIN_TOTAL if LG_CHUNK_MIN_TOTAL > 0 else (2 * max(1, LG_CHUNK_SIZE))
+    if len(txt) > threshold:
         state["graph_trace"] = (state.get("graph_trace") or []) + ["need_chunk:chunk"]
         return "chunk"
     state["graph_trace"] = (state.get("graph_trace") or []) + ["need_chunk:no_chunk"]
@@ -85,10 +130,10 @@ def chunk_notes(state: AgentState) -> AgentState:
     page_txt = (state.get("page", {}).get("text") or "")
     if not page_txt:
         return state
-    chunks = _chunk_text(page_txt, chunk_size=3500, overlap=150)
+    chunks = _chunk_text(page_txt, chunk_size=LG_CHUNK_SIZE, overlap=LG_CHUNK_OVERLAP)
 
     collected: List[str] = []
-    for idx, ch in enumerate(chunks[:6]):
+    for idx, ch in enumerate(chunks[: max(1, LG_CHUNK_NOTES_MAX_CHUNKS) ]):
         prompt = (
             "Внимательно изучи текст текущей страницы от начала до конца. "
             "Выдели ключевые факты, цифры, определения и подзаголовки. "
@@ -110,10 +155,10 @@ def chunk_notes(state: AgentState) -> AgentState:
                 collected.append(line[2:].strip())
             else:
                 collected.append(line)
-        if len(collected) >= 12:
+        if len(collected) >= max(1, LG_NOTES_MAX):
             break
     if collected:
-        state["notes"] = collected[:12]
+        state["notes"] = collected[: max(1, LG_NOTES_MAX) ]
     return state
 
 
@@ -174,6 +219,33 @@ def build_search_query(state: AgentState) -> AgentState:
     except Exception:
         assess = {"need_search": True, "search_query": "", "rationale": "fallback:error"}
 
+    # Явное намерение пользователя выполнить поиск → принудительно включаем поиск (только если флаг включён)
+    if _HEURISTICS_FLAG:
+        try:
+            import re as _re
+            if _re.search(r"\b(найд(и|ите)|ищи(ть)?|поиск|в\s+интернете|посмотри\s+в\s+интернете|аналог(и|ов)?|замен(а|у)|альтернатив|конкурент)\b", user, flags=_re.I):
+                assess["need_search"] = True
+                if not assess.get("search_query"):
+                    q_base = user.strip()
+                    if title:
+                        q_base = f"{q_base} {title}".strip()
+                    assess["search_query"] = q_base
+        except Exception:
+            pass
+
+    # Грубая эвристика общего вопроса включается только при флаге
+    if _HEURISTICS_FLAG:
+        try:
+            import re as _re
+            general = bool(_re.search(r"\b(кто\s+такой|что\s+такое|определение|биография|who\s+is|what\s+is)\b", user, flags=_re.I))
+            short_ctx = len((state.get("page", {}).get("text") or "")) < LG_SEARCH_MIN_CONTEXT_CHARS
+            if general and short_ctx:
+                assess["need_search"] = True
+                if not assess.get("search_query"):
+                    assess["search_query"] = (user + " " + title).strip()
+        except Exception:
+            pass
+
     state["need_search"] = bool(assess.get("need_search"))
     if not state["need_search"]:
         state["search_queries"] = []
@@ -200,7 +272,7 @@ def exa_search_node(state: AgentState) -> AgentState:
     state["graph_trace"] = trace
     queries = state.get("search_queries") or [state.get("search_query") or ""]
     # Time budget per EXA node execution (seconds)
-    time_budget_s = 2.5
+    time_budget_s = LG_EXA_TIME_BUDGET_S
     import time as _time
     started = _time.time()
     try:
@@ -243,10 +315,11 @@ def compose_prompt(state: AgentState) -> AgentState:
     trace.append("compose_prompt")
     state["graph_trace"] = trace
     sys = (
-        "Ты — умный ассистент по анализу веб-страниц. "
-        "Сначала внимательно изучи весь предоставленный текст страницы, включая списки и подзаголовки, затем отвечай. "
-        "Отвечай строго по контексту страницы, но если тебе не хватает информации используй все доступные данные чтобы подготовить ответ. "
-        "Формат: короткие ясные пункты; списки начинай с '- '. Без ссылок и служебных пометок."
+        "Ты — ассистент по анализу текущей веб-страницы. "
+        "Отвечай по сути и своими словами, кратко. "
+        "Если перечисляешь пункты — начинай каждую строку с '- '. "
+        "Не копируй большие куски исходного текста, не цитируй метки вроде 'TITLE:', 'URL:', 'TEXT:', 'PAGE:'. "
+        "Если информации не хватает — ориентируйся на заметки/фокус и краткий контекст."
     )
     parts: List[str] = [sys]
     page = state.get("page") or {}
@@ -270,7 +343,7 @@ def compose_prompt(state: AgentState) -> AgentState:
     # Включаем усечённый TEXT всегда, чтобы сохранить конкретику (цифры/факты)
     notes = state.get("notes") or []
     if page_text_full:
-        lines.append(f"TEXT: {page_text_full[:12000]}")
+        lines.append(f"TEXT: {page_text_full[:LG_PROMPT_TEXT_CHARS]}")
     # Добавим сжатые заметки, если есть
     if notes:
         lines.append("NOTES:\n- " + "\n- ".join(notes[:6]))

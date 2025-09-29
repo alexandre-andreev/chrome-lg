@@ -12,13 +12,46 @@ try:
 except Exception:
     load_dotenv()
 
+# Silence noisy C++/gRPC/absl logs in non-GCP envs
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("GRPC_TRACE", "")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("ABSL_LOGGING_STDERR_THRESHOLD", "3")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 import google.generativeai as genai
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from exa_py import Exa
 import requests
 import time
 import json
 
 logger = logging.getLogger(__name__)
+# Reduce verbosity of common noisy libraries
+for _name in ("google", "grpc", "absl"):
+    try:
+        logging.getLogger(_name).setLevel(logging.ERROR)
+    except Exception:
+        pass
+
+# --- Embeddings ---
+def embed_text(text: str, *, is_query: bool = False) -> Optional[list[float]]:
+    """Return embedding vector using Google embeddings API. Returns None on failure.
+    Uses model 'text-embedding-004'. If GEMINI_API_KEY missing, returns None.
+    """
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        model = "text-embedding-004"
+        task_type = "retrieval_query" if is_query else "retrieval_document"
+        resp = genai.embed_content(model=model, content=text or "", task_type=task_type)
+        vec = (resp.get("embedding") if isinstance(resp, dict) else getattr(resp, "embedding", None)) or None
+        if isinstance(vec, list) and vec:
+            return vec
+        return None
+    except Exception as e:
+        logger.debug("embed_text failed: %s", e)
+        return None
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 EXA_API_KEY = os.getenv("EXA_API_KEY")
@@ -70,13 +103,28 @@ def sanitize_answer(text: str) -> str:
 
 
 def call_gemini_text(prompt: str, model_name: str = "gemini-2.5-flash") -> str:
+    """Generate text with Gemini. If GEMINI_API_KEY is missing, return an empty string
+    so the caller can fall back without raising 500.
+    """
     if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is missing")
+        logger.warning("GEMINI_API_KEY is missing; returning empty text fallback")
+        return ""
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=SYSTEM_INSTRUCTION,
     )
-    resp = model.generate_content(prompt)
+    # Hard timeout for generation to avoid hangs on network/SDK issues
+    timeout_s = float(os.getenv("GEMINI_TIMEOUT_S", "20"))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(model.generate_content, prompt)
+            resp = fut.result(timeout=timeout_s)
+    except FuturesTimeout:
+        logger.error("Gemini generate_content timed out after %.1fs", timeout_s)
+        return ""
+    except Exception as e:
+        logger.exception("Gemini generate_content failed: %s", e)
+        return ""
     txt = getattr(resp, "text", "") or ""
     if not txt:
         # Try candidates/parts fallback
@@ -93,9 +141,12 @@ def call_gemini_text(prompt: str, model_name: str = "gemini-2.5-flash") -> str:
 
 
 def call_gemini_stream(prompt: str, model_name: str = "gemini-2.5-flash"):
-    """Yield text chunks as they arrive from Gemini."""
+    """Yield text chunks as they arrive from Gemini. If API key is missing,
+    yield a single explanatory chunk instead of raising.
+    """
     if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is missing")
+        yield "[stream-error] GEMINI_API_KEY is missing"
+        return
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=SYSTEM_INSTRUCTION,
@@ -105,6 +156,9 @@ def call_gemini_stream(prompt: str, model_name: str = "gemini-2.5-flash"):
     except TypeError:
         # Fallback for SDKs without stream kwarg
         resp = model.generate_content(prompt, stream=True)  # type: ignore
+    except Exception as e:
+        yield f"[stream-error] {e}"
+        return
     for chunk in resp:
         try:
             if getattr(chunk, "text", None):
