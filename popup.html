@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chrome-bot</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 12px; width: 340px; }
+    button { padding: 8px 12px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .results { margin-top: 12px; }
+    .item { margin-bottom: 10px; }
+    .muted { color: #666; font-size: 12px; }
+    .loader { display:none; }
+  </style>
+  <script defer src="popup.js"></script>
+  </head>
+<body>
+  <div class="row" style="justify-content: space-between;">
+    <strong>Chrome-bot</strong>
+    <a href="options.html" target="_blank" class="muted">Настройки</a>
+  </div>
+  <div id="chat" style="margin-top:10px; max-height: 380px; overflow:auto; border:1px solid #ddd; padding:8px; border-radius:6px; background:#fafafa; white-space: pre-wrap;"></div>
+  <div class="row" style="margin-top:8px; gap:6px;">
+    <button id="usePageBtn" title="Вставить контекст страницы">Вставить контекст</button>
+    <input id="chatInput" type="text" placeholder="Спросите ИИ…" style="flex:1; padding:8px;" />
+    <button id="sendBtn">Отправить</button>
+  </div>
+  <div id="status" class="muted" style="margin-top:6px;"></div>
+</body>
+</html>
+

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chrome-bot</title>
+  <style>
+    :root {
+      --bg: #e9f5ff; /* light blue */
+      --card: #fff9cc; /* pale yellow for assistant bubbles */
+      --text: #0a2540;
+      --muted: #4a5b76;
+      --accent: #6c8cff;
+      --accent-2: #26d0ce;
+      --user-bg-1: #d7ecff; /* light blue */
+      --user-bg-2: #c7e2ff; /* light blue gradient end */
+      --user-text: #0a2540;
+      --assistant-bg-1: #fff1a8; /* yellow */
+      --assistant-bg-2: #ffe47a; /* yellow gradient end */
+    }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Arial; background: var(--bg); color: var(--text); }
+    .wrap { display: flex; flex-direction: column; height: 100vh; width: 380px; background: var(--bg); }
+    header { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(10,37,64,.12); }
+    header .brand { font-weight: 600; letter-spacing: .3px; }
+    header .actions { display: flex; gap: 8px; }
+    header .icon-btn { background: transparent; color: var(--muted); border: 1px solid rgba(10,37,64,.2); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
+    .chat { flex: 1; overflow: auto; padding: 12px; }
+    .msg { margin: 10px 0; padding: 10px 12px; border-radius: 10px; max-width: 92%; box-shadow: 0 4px 14px rgba(0,0,0,.08); white-space: pre-wrap; }
+    .user { background: linear-gradient(135deg, var(--user-bg-1), var(--user-bg-2)); align-self: flex-end; border-top-right-radius: 4px; color: var(--user-text); }
+    .assistant { background: linear-gradient(135deg, var(--assistant-bg-1), var(--assistant-bg-2)); border-top-left-radius: 4px; color: #3a2a00; }
+    .meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .composer { padding: 10px; border-top: 1px solid rgba(10,37,64,.12); display: flex; gap: 8px; background: var(--bg); }
+    .composer textarea { flex: 1; background: #ffffff; color: var(--text); border: 1px solid rgba(10,37,64,.2); border-radius: 8px; padding: 10px; outline: none; min-height: 52px; max-height: 180px; resize: vertical; }
+    .composer button { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    .composer button:disabled { filter: grayscale(0.6); opacity: 0.6; cursor: default; }
+  </style>
+  <script defer src="sidepanel.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">Chrome-bot</div>
+      <div class="actions">
+        <button id="copyBtn" class="icon-btn" title="Скопировать чат">Копировать</button>
+      </div>
+    </header>
+    <div id="chat" class="chat"></div>
+    <div class="composer">
+      <textarea id="chatInput" placeholder="Спросите ИИ… (Shift+Enter — новая строка)" ></textarea>
+      <button id="sendBtn">Отправить</button>
+    </div>
+  </div>
+</body>
+</html>
+
+
