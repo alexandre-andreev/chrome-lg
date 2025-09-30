@@ -12,6 +12,11 @@ except Exception:
         load_dotenv()
     except Exception:
         pass
+try:
+    from .config import load_params_from_md
+    load_params_from_md()
+except Exception:
+    pass
 # module logger
 logger = logging.getLogger(__name__)
 from langgraph.graph import StateGraph, END
@@ -25,11 +30,13 @@ from .services import (
     evaluate_answer_sufficiency,
 	assess_need_search_llm,
 )
+from .rag import upsert_page, retrieve_top_k
 
 
 class AgentState(TypedDict, total=False):
     user_message: str
     page: Dict[str, Optional[str]]
+    force_search: Optional[bool]
     need_search: Optional[bool]
     search_query: Optional[str]
     search_results: Optional[List[Dict[str, Any]]]
@@ -57,6 +64,10 @@ LG_CHUNK_NOTES_MAX_CHUNKS = int(os.environ.get("LG_CHUNK_NOTES_MAX_CHUNKS", "6")
 LG_SEARCH_MIN_CONTEXT_CHARS = int(os.environ.get("LG_SEARCH_MIN_CONTEXT_CHARS", "1000"))
 LG_PROMPT_TEXT_CHARS = int(os.environ.get("LG_PROMPT_TEXT_CHARS", "4000"))
 LG_EXA_TIME_BUDGET_S = float(os.environ.get("LG_EXA_TIME_BUDGET_S", "2.5"))
+LG_SEARCH_RESULTS_MAX = int(os.environ.get("LG_SEARCH_RESULTS_MAX", "3"))
+LG_SEARCH_SNIPPET_CHARS = int(os.environ.get("LG_SEARCH_SNIPPET_CHARS", "300"))
+LG_NOTES_SHOW_MAX = int(os.environ.get("LG_NOTES_SHOW_MAX", "8"))
+LG_ANSWER_MAX_SENTENCES = int(os.environ.get("LG_ANSWER_MAX_SENTENCES", "0"))
 
 def prepare_context(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
@@ -213,6 +224,17 @@ def build_search_query(state: AgentState) -> AgentState:
     except Exception:
         host = None
 
+    # Принудительное включение поиска из UI
+    if bool(state.get("force_search")):
+        state["need_search"] = True
+        # базовый запрос: вопрос + тайтл
+        base_q = user.strip()
+        if title:
+            base_q = f"{base_q} {title}".strip()
+        state["search_query"] = base_q
+        state["search_queries"] = [base_q]
+        return state
+
     # LLM-классификация необходимости поиска (быстрая развилка)
     try:
         assess = assess_need_search_llm(user, state.get("page") or {}, state.get("notes") or [])
@@ -340,18 +362,50 @@ def compose_prompt(state: AgentState) -> AgentState:
     if structured:
         lines.append("STRUCTURED:\n- " + "\n- ".join(structured[:6]))
 
+    # RAG context (optional)
+    try:
+        _rag_enabled = (os.getenv("RAG_ENABLED") or "").lower() in ("1", "true", "yes")
+        if _rag_enabled:
+            host = None
+            try:
+                if page.get("url"):
+                    host = __import__("urllib.parse").urllib.parse.urlparse(page.get("url") or "").hostname
+            except Exception:
+                host = None
+            if host:
+                # Upsert current page into local index (best-effort)
+                try:
+                    added = upsert_page(host, page.get("url") or "", page.get("title") or "", page.get("text") or "", chunk_size=int(os.getenv("RAG_CHUNK_SIZE", "900")), overlap=int(os.getenv("RAG_OVERLAP", "120")), max_docs=int(os.getenv("RAG_MAX_DOCS_PER_HOST", "5000")))
+                    state["rag_upserted"] = int(added)
+                except Exception:
+                    pass
+                # Retrieve top-k by user query
+                try:
+                    top_k = int(os.getenv("RAG_TOP_K", "5"))
+                    rag_items = retrieve_top_k(host, state.get("user_message") or "", k=max(1, top_k))
+                    state["rag_items"] = rag_items or []
+                    if rag_items:
+                        rag_lines = [ (it.get("text") or "").replace("\n", " ")[:400] for it in rag_items[:max(1, top_k)] ]
+                        rag_lines = [s for s in rag_lines if s]
+                        if rag_lines:
+                            lines.append("RAG CONTEXT:\n- " + "\n- ".join(rag_lines))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # Включаем усечённый TEXT всегда, чтобы сохранить конкретику (цифры/факты)
     notes = state.get("notes") or []
     if page_text_full:
         lines.append(f"TEXT: {page_text_full[:LG_PROMPT_TEXT_CHARS]}")
     # Добавим сжатые заметки, если есть
     if notes:
-        lines.append("NOTES:\n- " + "\n- ".join(notes[:6]))
+        lines.append("NOTES:\n- " + "\n- ".join(notes[: max(1, LG_NOTES_SHOW_MAX) ]))
     if lines:
         parts.append("КОНТЕКСТ СТРАНИЦЫ:\n" + "\n".join(lines))
     results = state.get("search_results") or []
     if results:
-        snippets = [ (r.get("snippet") or "").replace("\n", " ")[:300] for r in results[:3] ]
+        snippets = [ (r.get("snippet") or "").replace("\n", " ")[: max(100, LG_SEARCH_SNIPPET_CHARS) ] for r in results[: max(1, LG_SEARCH_RESULTS_MAX) ] ]
         snippets = [s for s in snippets if s]
         if snippets:
             parts.append("РЕЗУЛЬТАТЫ ПОИСКА:\n- " + "\n- ".join(snippets))
@@ -375,31 +429,17 @@ def postprocess_answer(state: AgentState) -> AgentState:
     state["graph_trace"] = trace
     ans = state.get("final_answer") or ""
     cleaned = sanitize_answer(ans)
-    # Heuristic: if the user asked a general overview question, limit to 10 sentences
+    # Optional limit by sentences (0 disables)
     try:
         q = (state.get("user_message") or "").strip().lower()
-        def _is_general_overview_question(text: str) -> bool:
-            patterns = [
-                r"\bо\s+ч[её]м\s+эта\s+страниц",
-                r"\bчто\s+за\s+страниц",
-                r"\bкратко\s+опиши\s+страниц",
-                r"\bwhat\s+is\s+this\s+page\s+about",
-                r"\bwhat\s+is\s+this\s+site",
-                r"\boverview\b",
-                r"\bsummary\b",
-            ]
-            for p in patterns:
-                if re.search(p, text):
-                    return True
-            return False
-        def _limit_sentences(text: str, max_sentences: int = 10) -> str:
+        def _limit_sentences(text: str, max_sentences: int) -> str:
             # naive sentence split
             parts = re.split(r"(?<=[\.!?])\s+", text)
             if len(parts) <= max_sentences:
                 return text
             return " ".join(parts[:max_sentences]).strip()
-        if _is_general_overview_question(q) and cleaned:
-            cleaned = _limit_sentences(cleaned, 10)
+        if LG_ANSWER_MAX_SENTENCES and LG_ANSWER_MAX_SENTENCES > 0 and cleaned:
+            cleaned = _limit_sentences(cleaned, LG_ANSWER_MAX_SENTENCES)
     except Exception:
         pass
     state["final_answer"] = cleaned

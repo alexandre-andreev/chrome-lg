@@ -12,6 +12,13 @@ try:
 except Exception:
     load_dotenv()
 
+# Load non-secret params from params.md (API keys stay in .env.local)
+try:
+    from .config import load_params_from_md
+    load_params_from_md()
+except Exception:
+    pass
+
 # Silence noisy C++/gRPC/absl logs in non-GCP envs
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 os.environ.setdefault("GRPC_TRACE", "")
@@ -55,6 +62,7 @@ def embed_text(text: str, *, is_query: bool = False) -> Optional[list[float]]:
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 EXA_API_KEY = os.getenv("EXA_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 if GEMINI_API_KEY:
     try:
@@ -102,7 +110,7 @@ def sanitize_answer(text: str) -> str:
     return text
 
 
-def call_gemini_text(prompt: str, model_name: str = "gemini-2.5-flash") -> str:
+def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
     """Generate text with Gemini. If GEMINI_API_KEY is missing, return an empty string
     so the caller can fall back without raising 500.
     """
@@ -110,7 +118,7 @@ def call_gemini_text(prompt: str, model_name: str = "gemini-2.5-flash") -> str:
         logger.warning("GEMINI_API_KEY is missing; returning empty text fallback")
         return ""
     model = genai.GenerativeModel(
-        model_name=model_name,
+        model_name=(model_name or GEMINI_MODEL),
         system_instruction=SYSTEM_INSTRUCTION,
     )
     # Hard timeout for generation to avoid hangs on network/SDK issues
@@ -121,9 +129,13 @@ def call_gemini_text(prompt: str, model_name: str = "gemini-2.5-flash") -> str:
             resp = fut.result(timeout=timeout_s)
     except FuturesTimeout:
         logger.error("Gemini generate_content timed out after %.1fs", timeout_s)
-        return ""
+        return "Не удалось дождаться ответа от модели (таймаут). Попробуйте ещё раз или уменьшите объём контекста."
     except Exception as e:
         logger.exception("Gemini generate_content failed: %s", e)
+        msg = str(e) if e else ""
+        low = msg.lower()
+        if "quota" in low or "resourceexhausted" in msg or "429" in low:
+            return "Лимит запросов к модели исчерпан. Попробуйте позже или смените модель (GEMINI_MODEL)."
         return ""
     txt = getattr(resp, "text", "") or ""
     if not txt:
@@ -140,7 +152,7 @@ def call_gemini_text(prompt: str, model_name: str = "gemini-2.5-flash") -> str:
     return txt
 
 
-def call_gemini_stream(prompt: str, model_name: str = "gemini-2.5-flash"):
+def call_gemini_stream(prompt: str, model_name: Optional[str] = None):
     """Yield text chunks as they arrive from Gemini. If API key is missing,
     yield a single explanatory chunk instead of raising.
     """
@@ -148,7 +160,7 @@ def call_gemini_stream(prompt: str, model_name: str = "gemini-2.5-flash"):
         yield "[stream-error] GEMINI_API_KEY is missing"
         return
     model = genai.GenerativeModel(
-        model_name=model_name,
+        model_name=(model_name or GEMINI_MODEL),
         system_instruction=SYSTEM_INSTRUCTION,
     )
     try:
@@ -156,6 +168,14 @@ def call_gemini_stream(prompt: str, model_name: str = "gemini-2.5-flash"):
     except TypeError:
         # Fallback for SDKs without stream kwarg
         resp = model.generate_content(prompt, stream=True)  # type: ignore
+    except Exception as e:
+        msg = str(e) if e else ""
+        low = msg.lower()
+        if "quota" in low or "resourceexhausted" in msg or "429" in low:
+            yield "Лимит запросов к модели исчерпан. Попробуйте позже или смените модель (GEMINI_MODEL)."
+            return
+        yield f"[stream-error] {e}"
+        return
     except Exception as e:
         yield f"[stream-error] {e}"
         return
@@ -191,14 +211,14 @@ def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def call_gemini_json(prompt: str, model_name: str = "gemini-2.5-flash") -> Optional[Dict[str, Any]]:
+def call_gemini_json(prompt: str, model_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Ask Gemini to return JSON only. Parse defensively."""
     instruction = (
         "Ты отвечаешь ТОЛЬКО валидным JSON-объектом без лишнего текста и форматирования. "
         "Не используй markdown. Не добавляй комментарии."
     )
     final_prompt = instruction + "\n\n" + prompt
-    raw = call_gemini_text(final_prompt, model_name=model_name)
+    raw = call_gemini_text(final_prompt, model_name=(model_name or GEMINI_MODEL))
     return _safe_parse_json(raw)
 
 

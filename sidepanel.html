@@ -27,7 +27,9 @@
     .chat { flex: 1; overflow: auto; padding: 12px; }
     .msg { margin: 10px 0; padding: 10px 12px; border-radius: 10px; max-width: 92%; box-shadow: 0 4px 14px rgba(0,0,0,.08); white-space: pre-wrap; }
     .user { background: linear-gradient(135deg, var(--user-bg-1), var(--user-bg-2)); align-self: flex-end; border-top-right-radius: 4px; color: var(--user-text); }
-    .assistant { background: linear-gradient(135deg, var(--assistant-bg-1), var(--assistant-bg-2)); border-top-left-radius: 4px; color: #3a2a00; }
+    .assistant { border-top-left-radius: 4px; color: #3a2a00; }
+    .assistant.exa { background: linear-gradient(135deg, var(--assistant-bg-1), var(--assistant-bg-2)); }
+    .assistant.local { background: linear-gradient(135deg, var(--user-bg-1), var(--user-bg-2)); color: var(--user-text); }
     .meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
     .composer { padding: 10px; border-top: 1px solid rgba(10,37,64,.12); display: flex; gap: 8px; background: var(--bg); }
     .composer textarea { flex: 1; background: #ffffff; color: var(--text); border: 1px solid rgba(10,37,64,.2); border-radius: 8px; padding: 10px; outline: none; min-height: 52px; max-height: 180px; resize: vertical; }
@@ -39,9 +41,15 @@
 <body>
   <div class="wrap">
     <header>
-      <div class="brand">Chrome-bot</div>
+      <div class="actions" style="gap:12px; align-items:center">
+        <label style="display:flex; align-items:center; gap:6px; color: var(--muted); font-size:12px">
+          <input type="checkbox" id="forceSearchToggle" />
+          <span>Поиск</span>
+        </label>
+      </div>
       <div class="actions">
-        <button id="copyBtn" class="icon-btn" title="Скопировать чат">Копировать</button>
+        <button id="exportBtn" class="icon-btn" title="Выгрузить страницу в Markdown">Экспорт страницы</button>
+        <button id="copyBtn" class="icon-btn" title="Скопировать чат">Копировать чат</button>
       </div>
     </header>
     <div id="chat" class="chat"></div>

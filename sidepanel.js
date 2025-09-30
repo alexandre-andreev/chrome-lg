@@ -36,9 +36,11 @@ function setBusy(busy) {
   }
 }
 
-function pushMsg(role, text) {
+function pushMsg(role, text, opts) {
   const wrap = document.createElement('div');
-  wrap.className = 'msg ' + (role === 'user' ? 'user' : 'assistant');
+  const classes = ['msg', (role === 'user' ? 'user' : 'assistant')];
+  if (role !== 'user' && opts && opts.className) classes.push(opts.className);
+  wrap.className = classes.join(' ');
   const meta = document.createElement('div');
   meta.className = 'meta';
   meta.textContent = role === 'user' ? 'Вы' : 'ИИ';
@@ -96,7 +98,7 @@ async function sendChat(message) {
       const resp = await fetch(baseUrl + '/chat_stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, page_url: pageUrl, page_title: pageTitle, page_text: pageText })
+        body: JSON.stringify({ message, page_url: pageUrl, page_title: pageTitle, page_text: pageText, force_search: !!document.getElementById('forceSearchToggle')?.checked })
       });
       if (resp.ok && (resp.headers.get('content-type') || '').includes('text/plain')) {
         // Create a single assistant bubble once and append chunks there
@@ -129,12 +131,63 @@ async function sendChat(message) {
           body.textContent = sanitizeForDisplay(body.textContent + chunk);
           chatEl.scrollTop = chatEl.scrollHeight;
         }
-        // remove id to avoid reuse next time
-        if (wrap) {
-          wrap.removeAttribute('id');
-          if (body) body.removeAttribute('id');
+        // After stream ends, detect sources marker and highlight if search was used
+        try {
+          const txt = body.textContent || '';
+          const markerIdx = txt.lastIndexOf('\n\nИсточники:\n');
+          let usedSearch = false;
+          let urls = [];
+          if (markerIdx !== -1) {
+            usedSearch = true;
+            const lines = txt.substring(markerIdx + 13).split('\n');
+            urls = lines.map(s => s.trim()).filter(s => /^https?:\/\//i.test(s));
+            // strip sources marker from the main streamed bubble
+            const before = txt.substring(0, markerIdx).trimEnd();
+            body.textContent = before;
+            // mark streamed bubble as EXA-used
+            if (wrap && !wrap.className.includes('exa')) {
+              wrap.className = 'msg assistant exa';
+            }
+            // render clickable sources bubble similar to non-streaming path
+            if (urls.length) {
+              const sWrap = document.createElement('div');
+              sWrap.className = 'msg assistant exa';
+              const meta = document.createElement('div');
+              meta.className = 'meta';
+              meta.textContent = 'Источники';
+              const bodyDiv = document.createElement('div');
+              const list = document.createElement('div');
+              urls.slice(0, 6).forEach(u => {
+                const a = document.createElement('a');
+                a.href = u;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.textContent = u;
+                const line = document.createElement('div');
+                line.appendChild(a);
+                list.appendChild(line);
+              });
+              bodyDiv.appendChild(list);
+              sWrap.appendChild(meta);
+              sWrap.appendChild(bodyDiv);
+              chatEl.appendChild(sWrap);
+              chatEl.scrollTop = chatEl.scrollHeight;
+            }
+          }
+          // remove id to avoid reuse next time
+          if (wrap) {
+            wrap.removeAttribute('id');
+            if (body) body.removeAttribute('id');
+          }
+          return { streamed: true, answer: txt, used_search: usedSearch, sources: urls.map(u => ({ url: u })) };
+        } catch (_) {
+          // remove id to avoid reuse next time
+          if (wrap) {
+            wrap.removeAttribute('id');
+            if (body) body.removeAttribute('id');
+          }
+          return { streamed: true, answer: body.textContent, used_search: false, sources: [] };
         }
-        return { streamed: true, answer: body.textContent, used_search: false, sources: [] };
       }
     } catch (_) { /* fall back below */ }
 
@@ -142,7 +195,7 @@ async function sendChat(message) {
     const resp = await fetch(baseUrl + '/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, page_url: pageUrl, page_title: pageTitle, page_text: pageText })
+      body: JSON.stringify({ message, page_url: pageUrl, page_title: pageTitle, page_text: pageText, force_search: !!document.getElementById('forceSearchToggle')?.checked })
     });
     if (!resp.ok) throw new Error('Ошибка сервера: ' + resp.status);
     const data = await resp.json();
@@ -152,6 +205,54 @@ async function sendChat(message) {
     return data;
   } finally {
     setBusy(false);
+  }
+}
+
+// Export current page to Markdown
+async function exportCurrentPageToMarkdown() {
+  const baseUrl = await getBackendBaseUrl();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const currentTabIdLocal = tab?.id;
+  if (!currentTabIdLocal) {
+    pushMsg('assistant', 'Не удалось определить активную вкладку.');
+    return;
+  }
+  let pageData = null;
+  try {
+    pageData = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(currentTabIdLocal, { type: 'REQUEST_CONTEXT' }, (resp) => {
+        if (chrome.runtime.lastError) return resolve(null);
+        resolve(resp || null);
+      });
+    });
+  } catch (_) {}
+  const pageUrl = pageData?.url || tab.url;
+  const pageTitle = pageData?.title || tab.title;
+  const pageText = pageData?.text || '';
+  try {
+    const resp = await fetch(baseUrl + '/export_md', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_url: pageUrl, page_title: pageTitle, page_text: pageText })
+    });
+    if (!resp.ok) throw new Error('Ошибка сервера: ' + resp.status);
+    const data = await resp.json();
+    if (data?.filename && data?.content) {
+      const blob = new Blob([data.content], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = data.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      pushMsg('assistant', 'Экспортировано: ' + data.filename);
+    } else {
+      pushMsg('assistant', 'Не удалось получить Markdown.');
+    }
+  } catch (e) {
+    pushMsg('assistant', 'Ошибка экспорта: ' + (e?.message || String(e)));
   }
 }
 
@@ -168,19 +269,45 @@ sendBtn?.addEventListener('click', async () => {
   pushMsg('user', text);
   try {
     const data = await sendChat(text);
-    if (data?.answer && !data?.streamed) pushMsg('assistant', data.answer);
-    // Render external sources only if search was used AND user explicitly asked to search
-    if (hasExplicitSearchIntent(text) && data?.used_search && Array.isArray(data?.sources) && data.sources.length) {
+    if (data?.answer && !data?.streamed) {
+      const cls = (data?.used_search ? 'exa' : 'local');
+      pushMsg('assistant', data.answer, { className: cls });
+    }
+    // RAG debug (non-streaming)
+    if (!data?.streamed && data?.debug && data.debug.rag) {
+      const r = data.debug.rag;
+      const info = `RAG: ${r?.enabled ? 'on' : 'off'}; upserted=${r?.upserted ?? 0}; retrieved=${r?.retrieved_count ?? 0}`;
+      pushMsg('assistant', info, { className: 'local' });
+    }
+    // Render external sources when search was used (clickable)
+    if (!data?.streamed && data?.used_search && Array.isArray(data?.sources) && data.sources.length) {
       try {
-        const baseHost = new URL(lastUrlInActiveTab || '').hostname;
-        const links = data.sources
-          .map(s => s?.url)
-          .filter(u => {
-            if (!u || typeof u !== 'string') return false;
-            try { return new URL(u).hostname !== baseHost; } catch { return false; }
+        const urls = data.sources
+          .map(s => ({ url: s?.url, title: s?.title }))
+          .filter(x => x && x.url && typeof x.url === 'string');
+        if (urls.length) {
+          const wrap = document.createElement('div');
+          wrap.className = 'msg assistant exa';
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = 'Источники';
+          const body = document.createElement('div');
+          const list = document.createElement('div');
+          urls.slice(0, 6).forEach(it => {
+            const a = document.createElement('a');
+            a.href = it.url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.textContent = (it.title && typeof it.title === 'string' ? it.title : it.url);
+            const line = document.createElement('div');
+            line.appendChild(a);
+            list.appendChild(line);
           });
-        if (links.length) {
-          pushMsg('assistant', 'Внешние источники:\n' + links.join('\n'));
+          body.appendChild(list);
+          wrap.appendChild(meta);
+          wrap.appendChild(body);
+          chatEl.appendChild(wrap);
+          chatEl.scrollTop = chatEl.scrollHeight;
         }
       } catch (_) {}
     }
@@ -262,6 +389,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentTabId = tab?.id;
     lastUrlInActiveTab = tab?.url;
   } catch (_) {}
+  const exportBtn = document.getElementById('exportBtn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', async () => {
+      const orig = exportBtn.textContent;
+      exportBtn.textContent = 'Экспортируется…';
+      exportBtn.disabled = true;
+      try { await exportCurrentPageToMarkdown(); }
+      finally {
+        exportBtn.textContent = orig;
+        exportBtn.disabled = false;
+      }
+    });
+  }
 });
 
 

@@ -35,6 +35,65 @@ function parseJsonLdProducts() {
 	return products;
 }
 
+function extractAttrPairsFromDom(root) {
+    const pairs = [];
+    try {
+        // dl/dt/dd
+        const dls = Array.from(root.querySelectorAll('dl'));
+        for (const dl of dls) {
+            const dts = Array.from(dl.querySelectorAll('dt'));
+            for (const dt of dts) {
+                const dd = dt.nextElementSibling && dt.nextElementSibling.tagName && dt.nextElementSibling.tagName.toLowerCase() === 'dd' ? dt.nextElementSibling : null;
+                if (!dd) continue;
+                const k = safeText(dt);
+                const v = safeText(dd);
+                if (k && v) pairs.push([k, v]);
+            }
+        }
+        // tables
+        const rows = Array.from(root.querySelectorAll('table tr'));
+        for (const tr of rows) {
+            const tds = Array.from(tr.querySelectorAll('td,th'));
+            if (tds.length >= 2) {
+                const k = safeText(tds[0]);
+                const v = safeText(tds[1]);
+                if (k && v) pairs.push([k, v]);
+            }
+        }
+        // common list-based specs
+        const lis = Array.from(root.querySelectorAll('.specs li, .characteristics li, .params li, .product-params li'));
+        for (const li of lis) {
+            let k = '';
+            let v = '';
+            const b = li.querySelector('b, strong, .key, .label');
+            if (b) {
+                k = safeText(b);
+                v = safeText(li).replace(k, '').trim().replace(/^[:\-\s]+/, '');
+            } else {
+                const txt = safeText(li);
+                const m = txt.match(/^([^:]+):\s*(.+)$/);
+                if (m) { k = m[1].trim(); v = m[2].trim(); }
+            }
+            if (k && v) pairs.push([k, v]);
+        }
+    } catch (_) {}
+    return pairs;
+}
+
+function normalizeAttrKey(k) {
+    const key = (k || '').toLowerCase();
+    if (/(материал|material)/.test(key)) return 'MATERIAL';
+    if (/(состав)/.test(key)) return 'COMPOSITION';
+    if (/(цвет|color)/.test(key)) return 'COLOR';
+    if (/(размер|size)/.test(key)) return 'SIZE';
+    if (/(страна|country)/.test(key)) return 'COUNTRY';
+    if (/(производител|brand|бренд)/.test(key)) return 'BRAND';
+    if (/(модель|model)/.test(key)) return 'MODEL';
+    if (/(артикул|sku|код товара)/.test(key)) return 'SKU';
+    if (/(категор|category)/.test(key)) return 'CATEGORY';
+    return '';
+}
+
 function collectPageContext() {
 	try {
 		const url = location.href || '';
@@ -51,11 +110,15 @@ function collectPageContext() {
 		}
 		mainText = (mainText || '').slice(0, 30000);
 
-		// Extract product data from JSON-LD if present
+        // Extract product data from JSON-LD if present
 		const products = parseJsonLdProducts();
 		let productLine = '';
 		let priceLine = '';
 		let brandLine = '';
+        let materialLine = '';
+        let colorLine = '';
+        let sizeLine = '';
+        let compositionLine = '';
 		if (products.length) {
 			const p = products[0];
 			const name = (p.name || '').toString().trim();
@@ -63,6 +126,10 @@ function collectPageContext() {
 			const offers = Array.isArray(p.offers) ? p.offers[0] : p.offers;
 			const price = offers && (offers.price || offers.lowPrice || offers.highPrice);
 			const currency = offers && (offers.priceCurrency || offers.priceCurrencyCode);
+            const material = (p.material || '').toString().trim();
+            const color = (p.color || '').toString().trim();
+            if (material) materialLine = `MATERIAL: ${material}`;
+            if (color) colorLine = `COLOR: ${color}`;
 			if (name) productLine = `PRODUCT: ${name}`;
 			if (brand) brandLine = `BRAND: ${brand}`;
 			if (price) priceLine = `PRICE: ${price}${currency ? ' ' + currency : ''}`;
@@ -73,6 +140,21 @@ function collectPageContext() {
 		if (brandLine) pieces.push(brandLine);
 		if (productLine) pieces.push(productLine);
 		if (priceLine) pieces.push(priceLine);
+        if (materialLine) pieces.push(materialLine);
+        if (colorLine) pieces.push(colorLine);
+        if (sizeLine) pieces.push(sizeLine);
+        if (compositionLine) pieces.push(compositionLine);
+        // Extract attributes from DOM
+        const attrs = extractAttrPairsFromDom(document);
+        const seen = new Set();
+        for (const [k, v] of attrs) {
+            const NK = normalizeAttrKey(k);
+            if (!NK) continue;
+            const key = `${NK}: ${v}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            pieces.push(`${NK}: ${v}`);
+        }
 		if (ogDesc) pieces.push(`SUMMARY: ${ogDesc}`);
 		if (mainText) pieces.push(`PAGE: ${mainText}`);
 		const text = pieces.join('\n');

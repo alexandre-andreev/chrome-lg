@@ -1,14 +1,22 @@
 import logging
 from typing import Any, Dict, List, Optional
 import os
+import re
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
+# Ensure runtime flags are loaded from params.md (API keys remain in .env.local)
+try:
+    from .config import load_params_from_md
+    load_params_from_md()
+except Exception:
+    pass
+
 from .graph import app_graph, GRAPH_VIZ_PATH
-from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream
+from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream, call_gemini_text
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +26,7 @@ class ChatRequest(BaseModel):
     page_url: Optional[str] = None
     page_title: Optional[str] = None
     page_text: Optional[str] = None
+    force_search: Optional[bool] = False
 
 
 class ChatResponse(BaseModel):
@@ -27,6 +36,11 @@ class ChatResponse(BaseModel):
     decision: str | None = None
     graph_trace: List[str] | None = None
     debug: Dict[str, Any] | None = None
+
+
+class ExportResponse(BaseModel):
+    filename: str
+    content: str
 
 
 app = FastAPI(title="Chrome-bot Backend (LangGraph)", version="2.0.0")
@@ -62,7 +76,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             "url": payload.page_url,
             "title": payload.page_title,
             "text": payload.page_text,
-        }
+        },
+        "force_search": bool(payload.force_search or False),
     }
 
     try:
@@ -90,12 +105,25 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         graph_trace = out.get("graph_trace") or []
         if not answer:
             answer = "Не удалось получить содержательный ответ."
+        rag_debug = None
+        try:
+            if (os.getenv("RAG_DEBUG") or "").lower() in ("1", "true", "yes"):
+                rag_items = out.get("rag_items") or []
+                rag_debug = {
+                    "enabled": (os.getenv("RAG_ENABLED") or "").lower() in ("1", "true", "yes"),
+                    "upserted": int(out.get("rag_upserted") or 0),
+                    "retrieved_count": len(rag_items),
+                    "top_urls": [it.get("url") for it in rag_items[:5] if it.get("url")],
+                }
+        except Exception:
+            rag_debug = None
         debug = {
             "entities": out.get("entities"),
             "intent_explicit_search": out.get("intent_explicit_search"),
             "missing_entities_on_page": out.get("missing_entities_on_page"),
             "notes_count": len(out.get("notes") or []),
             "focus_count": len(out.get("focus") or []),
+            "rag": rag_debug,
         }
 
         return ChatResponse(
@@ -127,7 +155,8 @@ async def chat_stream(payload: ChatRequest):
             "url": payload.page_url,
             "title": payload.page_title,
             "text": payload.page_text,
-        }
+        },
+        "force_search": bool(payload.force_search or False),
     }
 
     # Build the graph up to compose_prompt, then stream LLM tokens
@@ -138,6 +167,14 @@ async def chat_stream(payload: ChatRequest):
         prompt = out.get("draft_answer") or ""
         sources = out.get("search_results") or []
         used_search = bool(out.get("used_search"))
+        # RAG debug snapshot for footer (optional)
+        rag_footer = None
+        try:
+            if (os.getenv("RAG_DEBUG") or "").lower() in ("1", "true", "yes"):
+                rag_items = out.get("rag_items") or []
+                rag_footer = f"\n\n[RAG] on; upserted={int(out.get('rag_upserted') or 0)}; retrieved={len(rag_items)}"
+        except Exception:
+            rag_footer = None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to prepare prompt: {e}")
 
@@ -158,6 +195,9 @@ async def chat_stream(payload: ChatRequest):
             urls = [s.get("url") for s in sources if s.get("url")]
             if urls:
                 yield "\n\nИсточники:\n" + "\n".join(urls[:3])
+        # RAG footer (optional)
+        if rag_footer:
+            yield rag_footer
 
     return StreamingResponse(token_gen(), media_type="text/plain; charset=utf-8")
 
@@ -185,4 +225,48 @@ async def health() -> Dict[str, Any]:
         "graph_path": GRAPH_VIZ_PATH,
         "graph_exists": bool(GRAPH_VIZ_PATH and os.path.exists(GRAPH_VIZ_PATH)),
     }
+
+
+@app.post("/export_md", response_model=ExportResponse)
+async def export_md(payload: Dict[str, Any]) -> ExportResponse:
+    page_url = (payload.get("page_url") or "").strip()
+    page_title = (payload.get("page_title") or "").strip()
+    page_text = (payload.get("page_text") or "").strip()
+    if not page_text and not page_title and not page_url:
+        raise HTTPException(status_code=400, detail="Empty page content")
+    # Build markdown using Gemini if available; otherwise fallback to simple formatting
+    title = page_title or (page_url or "Страница").split("/")[-1]
+    safe_title = re.sub(r"[^\w\-а-яА-ЯёЁ ]+", "_", title).strip() or "page"
+    filename = safe_title[:80] + ".md"
+    md_content = f"# {title}\n\nURL: {page_url}\n\n" if title else ""
+    body = page_text
+    # Try literary processing via Gemini if key present
+    try:
+        if GEMINI_API_KEY:
+            prompt = (
+                "Суммируй и структурируй содержимое веб-страницы в Markdown. "
+                "Добавь оглавление, основные разделы, списки, важные факты и определения. "
+                "Не вставляй рекламные блоки, меню и навигацию. Язык — исходный.\n\n"
+                f"TITLE: {page_title}\nURL: {page_url}\nTEXT:\n{page_text[:20000]}"
+            )
+            generated = call_gemini_text(prompt)
+            if generated:
+                md_content = generated
+            else:
+                md_content = md_content + body
+        else:
+            # Fallback: include structured attributes prominently if present
+            try:
+                parts = []
+                for m in re.finditer(r"^(PRODUCT|BRAND|PRICE|MATERIAL|COLOR|SIZE|COMPOSITION|SKU|COUNTRY):\s*(.+)$", body, flags=re.M):
+                    parts.append(f"- {m.group(1)}: {m.group(2)}")
+                if parts:
+                    md_content = md_content + "## Характеристики\n" + "\n".join(parts) + "\n\n" + body
+                else:
+                    md_content = md_content + body
+            except Exception:
+                md_content = md_content + body
+    except Exception:
+        md_content = md_content + body
+    return ExportResponse(filename=filename, content=md_content)
 
