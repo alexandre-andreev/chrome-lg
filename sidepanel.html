@@ -49,9 +49,18 @@
       </div>
       <div class="actions">
         <button id="exportBtn" class="icon-btn" title="Выгрузить страницу в Markdown">Экспорт страницы</button>
+        <button id="settingsBtn" class="icon-btn" title="Настройки">Настройки</button>
         <button id="copyBtn" class="icon-btn" title="Скопировать чат">Копировать чат</button>
       </div>
     </header>
+    <div id="settingsModal" style="display:none; position: absolute; top: 48px; right: 12px; background: #fff; border: 1px solid rgba(10,37,64,.2); border-radius: 8px; padding: 12px; z-index: 1000; width: 320px; box-shadow: 0 8px 24px rgba(0,0,0,.15);">
+      <div style="font-weight:600; margin-bottom:8px;">Параметры</div>
+      <div id="settingsBody" style="display:flex; flex-direction:column; gap:8px; max-height: 50vh; overflow:auto;"></div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top: 10px;">
+        <button id="settingsCancel" class="icon-btn">Отмена</button>
+        <button id="settingsSave" class="icon-btn">Сохранить</button>
+      </div>
+    </div>
     <div id="chat" class="chat"></div>
     <div class="composer">
       <textarea id="chatInput" placeholder="Спросите ИИ… (Shift+Enter — новая строка)" ></textarea>

@@ -2,22 +2,32 @@ import logging
 from typing import Any, Dict, List, Optional
 import os
 import re
+import logging
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-# Ensure runtime flags are loaded from params.md (API keys remain in .env.local)
+# Ensure runtime flags are loaded from params.override.json (API keys remain in .env.local)
 try:
-    from .config import load_params_from_md
-    load_params_from_md()
+    from .config import load_overrides_from_json
+    load_overrides_from_json()
 except Exception:
     pass
 
-from .graph import app_graph, GRAPH_VIZ_PATH
-from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream, call_gemini_text
+from .graph import app_graph as _compiled_graph, GRAPH_VIZ_PATH
+from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream, call_gemini_text, embed_text
+from .config import load_overrides_from_json, save_overrides_to_json
+import threading
+import importlib
 
+# Configure root logging (can be overridden by LOG_LEVEL env)
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+try:
+    logging.basicConfig(level=getattr(logging, _log_level, logging.INFO))
+except Exception:
+    logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -43,7 +53,7 @@ class ExportResponse(BaseModel):
     content: str
 
 
-app = FastAPI(title="Chrome-bot Backend (LangGraph)", version="2.0.0")
+app = FastAPI(title="Chrome-bot Backend (LangGraph)", version="2.1.0")
 _LAST_HOST: str | None = None
 app.add_middleware(
     CORSMiddleware,
@@ -53,6 +63,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize compiled graph pointer and mutex
+app.state.app_graph = _compiled_graph
+_cfg_lock = threading.Lock()
+
 
 @app.get("/")
 async def root() -> Dict[str, Any]:
@@ -61,6 +75,7 @@ async def root() -> Dict[str, Any]:
         "engine": "langgraph",
         "graph_image_exists": bool(GRAPH_VIZ_PATH and os.path.exists(GRAPH_VIZ_PATH)),
         "graph_mermaid_exists": bool(GRAPH_VIZ_PATH and os.path.exists((os.path.splitext(GRAPH_VIZ_PATH)[0] + ".mmd"))),
+        "version": app.version,
     }
 
 
@@ -97,7 +112,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                 pass
             _LAST_HOST = host
 
-        out = app_graph.invoke(state_in)
+        out = app.state.app_graph.invoke(state_in)
         answer = (out.get("final_answer") or "").strip()
         sources = out.get("search_results") or []
         used_search = bool(out.get("used_search"))
@@ -225,6 +240,180 @@ async def health() -> Dict[str, Any]:
         "graph_path": GRAPH_VIZ_PATH,
         "graph_exists": bool(GRAPH_VIZ_PATH and os.path.exists(GRAPH_VIZ_PATH)),
     }
+
+
+_ALLOWED_CONFIG_KEYS = {
+    "STREAMING_ENABLED",
+    "RAG_ENABLED", "RAG_TOP_K", "RAG_DEBUG",
+    "RAG_CHUNK_SIZE", "RAG_OVERLAP", "RAG_MAX_DOCS_PER_HOST",
+    "LG_CHUNK_SIZE", "LG_CHUNK_OVERLAP", "LG_CHUNK_MIN_TOTAL",
+    "LG_CHUNK_NOTES_MAX_CHUNKS",
+    "LG_NOTES_MAX", "LG_NOTES_SHOW_MAX",
+    "LG_SEARCH_MIN_CONTEXT_CHARS", "LG_PROMPT_TEXT_CHARS",
+    "LG_EXA_TIME_BUDGET_S", "LG_SEARCH_RESULTS_MAX", "LG_SEARCH_SNIPPET_CHARS",
+    "LG_ANSWER_MAX_SENTENCES",
+    "LG_SEARCH_HEURISTICS",
+    "GEMINI_MODEL",
+    # EXA tuning
+    "EXA_NUM_RESULTS", "EXA_GET_CONTENTS_N", "EXA_SUBPAGES", "EXA_EXTRAS_LINKS",
+    "EXA_TEXT_MAX_CHARS", "EXA_LANG", "EXA_EXCLUDE_DOMAINS", "EXA_TIMEOUT_S",
+    "EXA_RESEARCH_ENABLED", "EXA_RESEARCH_TIMEOUT_S", "EXA_SUMMARY_ENABLED",
+    "RAG_INDEX_DIR",
+}
+
+
+@app.get("/config")
+async def get_config() -> Dict[str, Any]:
+    # Reload overlay to reflect file changes if any
+    try:
+        load_overrides_from_json()
+    except Exception:
+        pass
+    return {k: os.getenv(k) for k in sorted(_ALLOWED_CONFIG_KEYS)}
+
+
+def _hot_reload_graph_locked() -> None:
+    # Re-apply overrides, then reload graph module and swap compiled graph
+    load_overrides_from_json()
+    mod_name = f"{__package__}.graph" if __package__ else "backend_lg.app.graph"
+    mod = importlib.import_module(mod_name)
+    importlib.reload(mod)
+    app.state.app_graph = getattr(mod, "app_graph")
+
+
+@app.post("/config")
+async def post_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    values = {}
+    for k, v in payload.items():
+        if k in _ALLOWED_CONFIG_KEYS:
+            values[k] = v
+    if not values:
+        return {"updated": 0}
+    save_overrides_to_json(values)
+    with _cfg_lock:
+        try:
+            _hot_reload_graph_locked()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
+    return {"updated": len(values)}
+
+
+@app.get("/debug/embed_ok")
+async def debug_embed_ok() -> Dict[str, Any]:
+    try:
+        ok_doc = bool(embed_text("diagnostics:doc", is_query=False))
+        ok_q = bool(embed_text("diagnostics:query", is_query=True))
+        return {"doc": ok_doc, "query": ok_q}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.api_route("/debug/rag_upsert_test", methods=["GET", "POST"])
+async def debug_rag_upsert_test(payload: Optional[Dict[str, Any]] = None, host: Optional[str] = None, url: Optional[str] = None, title: Optional[str] = None, text: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        from .rag import upsert_page, _index_path
+        data = payload or {}
+        _host = (host or data.get("host") or "example.com").strip()
+        _url = (url or data.get("url") or f"https://{_host}/test").strip()
+        _title = (title or data.get("title") or "RAG Diagnostics").strip()
+        _text = (text or data.get("text") or ("DIAG\n" * 200)).strip()
+        added = upsert_page(_host, _url, _title, _text, chunk_size=int(os.getenv("RAG_CHUNK_SIZE", "900")), overlap=int(os.getenv("RAG_OVERLAP", "120")), max_docs=int(os.getenv("RAG_MAX_DOCS_PER_HOST", "5000")))
+        return {"host": _host, "added": int(added), "index_path": _index_path(_host)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"rag_upsert_test failed: {e}")
+
+
+@app.api_route("/debug/rag_clear", methods=["GET", "POST"])
+async def debug_rag_clear(payload: Optional[Dict[str, Any]] = None, host: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        from .rag import _host_dir, _index_path
+        data = payload or {}
+        _host = (host or data.get("host") or "").strip()
+        if not _host:
+            raise HTTPException(status_code=400, detail="host is required")
+        idx = _index_path(_host)
+        removed = False
+        try:
+            if os.path.exists(idx):
+                os.remove(idx)
+                removed = True
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"remove failed: {e}")
+        # attempt to remove empty dir
+        try:
+            d = _host_dir(_host)
+            if os.path.isdir(d) and not os.listdir(d):
+                os.rmdir(d)
+        except Exception:
+            pass
+        return {"host": _host, "index_path": idx, "removed": removed}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"rag_clear failed: {e}")
+
+
+@app.api_route("/debug/rag_retrieve_test", methods=["GET", "POST"])
+async def debug_rag_retrieve_test(payload: Optional[Dict[str, Any]] = None, host: Optional[str] = None, q: Optional[str] = None, k: Optional[int] = None) -> Dict[str, Any]:
+    try:
+        from .rag import retrieve_top_k
+        _host = (host or (payload or {}).get("host") or "").strip()
+        _q = (q or (payload or {}).get("q") or "пять ключевых принципов DevOps").strip()
+        _k = int(k or (payload or {}).get("k") or os.getenv("RAG_TOP_K", "5"))
+        if not _host:
+            raise HTTPException(status_code=400, detail="host is required")
+        items = retrieve_top_k(_host, _q, k=max(1, _k))
+        return {"host": _host, "q": _q, "k": _k, "count": len(items or []), "items": items[:3] if items else []}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"rag_retrieve_test failed: {e}")
+
+
+@app.api_route("/debug/rag_upsert_page", methods=["GET", "POST"])
+async def debug_rag_upsert_page(payload: Optional[Dict[str, Any]] = None, page_url: Optional[str] = None, page_title: Optional[str] = None, page_text: Optional[str] = None) -> Dict[str, Any]:
+    """Upsert real page chunks into RAG index for debugging/testing."""
+    try:
+        from .rag import upsert_page
+        _url = (page_url or (payload or {}).get("page_url") or "").strip()
+        _title = (page_title or (payload or {}).get("page_title") or "").strip()
+        _text = (page_text or (payload or {}).get("page_text") or "").strip()
+        if not _url:
+            raise HTTPException(status_code=400, detail="page_url is required")
+        if not _text:
+            raise HTTPException(status_code=400, detail="page_text is required")
+        
+        # Parse host from URL
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(_url).hostname
+            if not host:
+                raise ValueError("Cannot parse hostname from URL")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid page_url: {e}")
+        
+        # Upsert chunks
+        chunk_size = int(os.getenv("RAG_CHUNK_SIZE", "900"))
+        overlap = int(os.getenv("RAG_OVERLAP", "120"))
+        max_docs = int(os.getenv("RAG_MAX_DOCS_PER_HOST", "5000"))
+        added = upsert_page(host, _url, _title, _text, chunk_size=chunk_size, overlap=overlap, max_docs=max_docs)
+        
+        return {
+            "host": host,
+            "url": _url,
+            "title": _title,
+            "text_len": len(_text),
+            "chunk_size": chunk_size,
+            "overlap": overlap,
+            "added": added
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("rag_upsert_page failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"rag_upsert_page failed: {e}")
 
 
 @app.post("/export_md", response_model=ExportResponse)

@@ -41,3 +41,52 @@ def load_params_from_md(path: Optional[str] = None, *, reserved_keys: Iterable[s
         return 0
 
 
+def _overrides_path() -> str:
+    return os.path.join(_repo_root(), "params.override.json")
+
+
+def load_overrides_from_json(path: Optional[str] = None, *, reserved_keys: Iterable[str] = ("GEMINI_API_KEY", "EXA_API_KEY")) -> int:
+    p = path or _overrides_path()
+    try:
+        import json
+        if not os.path.exists(p):
+            return 0
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        count = 0
+        for k, v in (data.items() if isinstance(data, dict) else []):
+            if not isinstance(k, str) or not k.isupper():
+                continue
+            if k in reserved_keys or k.endswith("_API_KEY"):
+                continue
+            os.environ[k] = str(v)
+            count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def save_overrides_to_json(values: dict) -> None:
+    try:
+        import json
+        path = _overrides_path()
+        existing = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = (json.load(f) or {}) if f else {}
+            except Exception:
+                existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        # merge
+        for k, v in (values.items() if isinstance(values, dict) else []):
+            existing[k] = v
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+

@@ -16,6 +16,11 @@ def _project_base_dir() -> str:
 def _get_index_base_dir() -> str:
     base = os.environ.get("RAG_INDEX_DIR")
     if base:
+        # Expand relative paths to absolute for clarity in logs
+        try:
+            base = os.path.abspath(base)
+        except Exception:
+            pass
         return base
     return os.path.join(_project_base_dir(), ".rag_index")
 
@@ -25,7 +30,12 @@ def _sanitize_host(host: str) -> str:
 
 
 def _host_dir(host: str) -> str:
-    return os.path.join(_get_index_base_dir(), _sanitize_host(host))
+    d = os.path.join(_get_index_base_dir(), _sanitize_host(host))
+    try:
+        logger.info("RAG host dir: %s", d)
+    except Exception:
+        pass
+    return d
 
 
 def _index_path(host: str) -> str:
@@ -70,6 +80,10 @@ def _load_index(host: str) -> List[Dict[str, Any]]:
                 except Exception:
                     continue
     except FileNotFoundError:
+        try:
+            logger.info("RAG index not found (ok on first run): %s", path)
+        except Exception:
+            pass
         return []
     except Exception as e:
         logger.debug("RAG load index failed: %s", e)
@@ -84,6 +98,10 @@ def _save_index(host: str, items: List[Dict[str, Any]]) -> None:
         for it in items:
             f.write(json.dumps(it, ensure_ascii=False) + "\n")
     os.replace(tmp, path)
+    try:
+        logger.info("RAG index saved: %s (items=%d)", path, len(items))
+    except Exception:
+        pass
 
 
 def upsert_page(host: str, url: str, title: str, text: str, *, chunk_size: int, overlap: int, max_docs: int = 5000) -> int:
@@ -91,6 +109,10 @@ def upsert_page(host: str, url: str, title: str, text: str, *, chunk_size: int, 
     Returns number of new chunks added.
     """
     if not host or not text:
+        try:
+            logger.info("RAG upsert skipped: host=%r text_len=%d", host, len(text or ""))
+        except Exception:
+            pass
         return 0
     chunks = chunk_for_rag(text, chunk_size=chunk_size, overlap=overlap)
     existing = _load_index(host)
@@ -102,6 +124,10 @@ def upsert_page(host: str, url: str, title: str, text: str, *, chunk_size: int, 
             continue
         vec = embed_text(ch, is_query=False)
         if not vec:
+            try:
+                logger.warning("RAG embedding failed for chunk %d (len=%d) url=%s", idx, len(ch), url)
+            except Exception:
+                pass
             continue
         existing.append({
             "id": cid,

@@ -2,6 +2,7 @@ from typing import TypedDict, Optional, List, Dict, Any
 import re
 import os
 import logging
+from urllib.parse import urlparse
 # Ensure env is loaded early so visualization flags are available on import
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -13,8 +14,8 @@ except Exception:
     except Exception:
         pass
 try:
-    from .config import load_params_from_md
-    load_params_from_md()
+    from .config import load_overrides_from_json
+    load_overrides_from_json()
 except Exception:
     pass
 # module logger
@@ -220,7 +221,7 @@ def build_search_query(state: AgentState) -> AgentState:
     host = None
     try:
         if url:
-            host = __import__("urllib.parse").urllib.parse.urlparse(url).hostname
+            host = urlparse(url).hostname
     except Exception:
         host = None
 
@@ -233,6 +234,31 @@ def build_search_query(state: AgentState) -> AgentState:
             base_q = f"{base_q} {title}".strip()
         state["search_query"] = base_q
         state["search_queries"] = [base_q]
+        return state
+
+    # Принудительное отключение поиска по конфигу
+    try:
+        _exa_num = int(os.getenv("EXA_NUM_RESULTS", "0"))
+    except Exception:
+        _exa_num = 0
+    _exa_research = (os.getenv("EXA_RESEARCH_ENABLED") or "").lower() in ("1", "true", "yes")
+    try:
+        _exa_budget = float(os.getenv("LG_EXA_TIME_BUDGET_S", "0"))
+    except Exception:
+        _exa_budget = 0.0
+    try:
+        _results_cap = int(os.getenv("LG_SEARCH_RESULTS_MAX", "0"))
+    except Exception:
+        _results_cap = 0
+    _search_disabled = (_exa_num <= 0 and not _exa_research) or (_exa_budget <= 0) or (_results_cap <= 0)
+    if _search_disabled:
+        try:
+            logger.info("Search disabled by config: EXA_NUM=%s, RESEARCH=%s, BUDGET=%s, RESULTS_MAX=%s", _exa_num, _exa_research, _exa_budget, _results_cap)
+        except Exception:
+            pass
+        state["need_search"] = False
+        state["search_queries"] = []
+        state["search_query"] = ""
         return state
 
     # LLM-классификация необходимости поиска (быстрая развилка)
@@ -295,6 +321,24 @@ def exa_search_node(state: AgentState) -> AgentState:
     queries = state.get("search_queries") or [state.get("search_query") or ""]
     # Time budget per EXA node execution (seconds)
     time_budget_s = LG_EXA_TIME_BUDGET_S
+    # Early skip if disabled by config
+    try:
+        _exa_num = int(os.getenv("EXA_NUM_RESULTS", "0"))
+    except Exception:
+        _exa_num = 0
+    _exa_research = (os.getenv("EXA_RESEARCH_ENABLED") or "").lower() in ("1", "true", "yes")
+    try:
+        _results_cap = int(os.getenv("LG_SEARCH_RESULTS_MAX", "0"))
+    except Exception:
+        _results_cap = 0
+    if time_budget_s <= 0 or (_exa_num <= 0 and not _exa_research) or (_results_cap <= 0):
+        try:
+            logger.info("EXA search skipped: budget=%s, EXA_NUM=%s, RESEARCH=%s, RESULTS_MAX=%s", time_budget_s, _exa_num, _exa_research, _results_cap)
+        except Exception:
+            pass
+        state["search_results"] = []
+        state["used_search"] = False
+        return state
     import time as _time
     started = _time.time()
     try:
@@ -324,7 +368,7 @@ def exa_search_node(state: AgentState) -> AgentState:
     # Research fallback только если остался бюджет времени
     if (not results or (len(results) == 1 and results[0].get("error"))) and (_time.time() - started) <= time_budget_s:
         q0 = (queries[0] if queries else "").strip()
-        research_results = exa_research(f"{q0}. Сжато перечисли 3-5 фактов без лишней воды")
+        research_results = exa_research(f"{q0}. Найди и перечисли 3-5 фактов максимально близких к запросу без лишней воды")
         if research_results and not research_results[0].get("error"):
             results = research_results
     state["search_results"] = results
@@ -338,13 +382,17 @@ def compose_prompt(state: AgentState) -> AgentState:
     state["graph_trace"] = trace
     sys = (
         "Ты — ассистент по анализу текущей веб-страницы. "
-        "Отвечай по сути и своими словами, кратко. "
+        "Отвечай по сути и своими словами, макисмально содержательно и полно. "
         "Если перечисляешь пункты — начинай каждую строку с '- '. "
         "Не копируй большие куски исходного текста, не цитируй метки вроде 'TITLE:', 'URL:', 'TEXT:', 'PAGE:'. "
-        "Если информации не хватает — ориентируйся на заметки/фокус и краткий контекст."
+        "В твоем распоряжении внешний сервис поиска - exa. Если информации для ответа не хватает — запрашиавай поиск exa."
     )
     parts: List[str] = [sys]
     page = state.get("page") or {}
+    try:
+        logger.debug("compose_prompt: url=%r title=%r text_len=%d", page.get("url"), page.get("title"), len((page.get("text") or "")))
+    except Exception:
+        pass
     lines: List[str] = []
     if page.get("url"): lines.append(f"URL: {page['url']}")
     if page.get("title"): lines.append(f"TITLE: {page['title']}")
@@ -365,34 +413,61 @@ def compose_prompt(state: AgentState) -> AgentState:
     # RAG context (optional)
     try:
         _rag_enabled = (os.getenv("RAG_ENABLED") or "").lower() in ("1", "true", "yes")
-        if _rag_enabled:
+        _rag_force = (os.getenv("RAG_FORCE_IN_PROMPT") or "").lower() in ("1", "true", "yes")
+        if not _rag_enabled and not _rag_force:
+            try:
+                logger.info("RAG: disabled by config (RAG_ENABLED=%r, RAG_FORCE_IN_PROMPT=%r)", os.getenv("RAG_ENABLED"), os.getenv("RAG_FORCE_IN_PROMPT"))
+            except Exception:
+                logger.exception("RAG: log failed on disabled notice")
+        if _rag_enabled or _rag_force:
             host = None
             try:
                 if page.get("url"):
-                    host = __import__("urllib.parse").urllib.parse.urlparse(page.get("url") or "").hostname
+                    host = urlparse(page.get("url") or "").hostname
             except Exception:
+                logger.exception("RAG: failed to parse host from url")
                 host = None
             if host:
+                try:
+                    logger.info("RAG: enabled=%s force=%s host=%s page_text_len=%d", _rag_enabled, _rag_force, host, len((page.get("text") or "")))
+                except Exception:
+                    logger.exception("RAG: log failed on branch start")
                 # Upsert current page into local index (best-effort)
                 try:
                     added = upsert_page(host, page.get("url") or "", page.get("title") or "", page.get("text") or "", chunk_size=int(os.getenv("RAG_CHUNK_SIZE", "900")), overlap=int(os.getenv("RAG_OVERLAP", "120")), max_docs=int(os.getenv("RAG_MAX_DOCS_PER_HOST", "5000")))
                     state["rag_upserted"] = int(added)
+                    try:
+                        logger.info("RAG upsert done: host=%s added=%d", host, added)
+                    except Exception:
+                        logger.exception("RAG: log failed on upsert")
                 except Exception:
-                    pass
+                    logger.exception("RAG: upsert failed")
                 # Retrieve top-k by user query
                 try:
+                    # Build a better query for RAG: prefer user message; fall back to title; add focus terms if message is too generic
+                    raw_q = (state.get("user_message") or "").strip()
+                    title_q = (page.get("title") or "").strip()
+                    q_use = raw_q if len(raw_q) >= 3 else title_q
+                    if not q_use:
+                        q_use = (raw_q + " " + title_q).strip()
+                    state["rag_query"] = q_use
                     top_k = int(os.getenv("RAG_TOP_K", "5"))
-                    rag_items = retrieve_top_k(host, state.get("user_message") or "", k=max(1, top_k))
+                    logger.debug("RAG: retrieving top_k=%d for q=%r", top_k, q_use)
+                    rag_items = retrieve_top_k(host, q_use, k=max(1, top_k))
                     state["rag_items"] = rag_items or []
+                    try:
+                        logger.info("RAG retrieve: host=%s k=%d got=%d q=%r", host, top_k, len(rag_items or []), q_use)
+                    except Exception:
+                        logger.exception("RAG: log failed on retrieve")
                     if rag_items:
                         rag_lines = [ (it.get("text") or "").replace("\n", " ")[:400] for it in rag_items[:max(1, top_k)] ]
                         rag_lines = [s for s in rag_lines if s]
                         if rag_lines:
                             lines.append("RAG CONTEXT:\n- " + "\n- ".join(rag_lines))
                 except Exception:
-                    pass
+                    logger.exception("RAG: retrieve failed")
     except Exception:
-        pass
+        logger.exception("RAG: outer block failed")
 
     # Включаем усечённый TEXT всегда, чтобы сохранить конкретику (цифры/факты)
     notes = state.get("notes") or []

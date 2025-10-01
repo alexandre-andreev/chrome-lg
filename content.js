@@ -2,7 +2,10 @@
 
 function safeText(node) {
 	try {
-		return (node && node.innerText ? node.innerText : '').trim();
+		if (!node) return '';
+		// Try innerText first (formatted), fallback to textContent (raw)
+		let text = node.innerText || node.textContent || '';
+		return text.trim();
 	} catch (_) { return ''; }
 }
 
@@ -102,12 +105,26 @@ function collectPageContext() {
 		const ogDesc = firstContent('meta[property="og:description"]') || firstContent('meta[name="description"]') || firstContent('meta[name="twitter:description"]');
 
 		// Prefer main/article/product containers for page text
-		let mainEl = document.querySelector('main,[role="main"],article,.product-page,.product,.product-card,.product-item');
-		let mainText = safeText(mainEl);
-		if (!mainText) {
-			// fallback to body but trimmed
-			mainText = safeText(document.body);
-		}
+		// Add site-specific selectors for Habr, Medium, etc.
+        let mainEl = document.querySelector(
+			'main,[role="main"],article,' +
+			'.article__content,.tm-article-body,.post__text,' + // Habr
+			'.post-content,.entry-content,.content,' + // Medium, WordPress
+			'.product-page,.product,.product-card,.product-item' // E-commerce
+		);
+        let mainText = safeText(mainEl);
+        if (!mainText) {
+			// Try article body directly (for Habr v2)
+			const article = document.querySelector('article');
+			if (article) mainText = safeText(article);
+        }
+        if (!mainText) {
+            // broader fallback: prefer documentElement to capture SPA-rendered content
+            mainText = safeText(document.documentElement);
+            if (!mainText) {
+                mainText = safeText(document.body);
+            }
+        }
 		mainText = (mainText || '').slice(0, 30000);
 
         // Extract product data from JSON-LD if present
@@ -181,11 +198,15 @@ function sendMessageSafe(message, attempt) {
 
 function sendContext() {
     const ctx = collectPageContext();
+    console.log('[content.js] sendContext: text_len=', ctx.text?.length || 0, 'url=', ctx.url);
     sendMessageSafe({ type: 'PAGE_CONTEXT', ...ctx });
 }
 
-// Initial send
-sendContext();
+// Initial send with slight delay to allow dynamic content load
+setTimeout(sendContext, 500);
+
+// Re-send after 1.5s for slow-loading SPA content (Habr, Medium, etc.)
+setTimeout(sendContext, 1500);
 
 // Re-send when URL changes (SPA and history API)
 let lastHref = location.href;
@@ -193,11 +214,26 @@ const notifyIfChanged = () => {
 	const href = location.href;
 	if (href !== lastHref) {
 		lastHref = href;
-		sendContext();
+        setTimeout(sendContext, 300);
+        setTimeout(sendContext, 1500); // Also resend after delay for SPA
 	}
 };
 
-const observer = new MutationObserver(notifyIfChanged);
+let mainContentSent = false;
+const observer = new MutationObserver(() => {
+    // If main content appears later, resend context (but only once)
+    if (mainContentSent) return;
+    const mainEl = document.querySelector(
+		'main,[role="main"],article,' +
+		'.article__content,.tm-article-body,.post__text,' +
+		'.post-content,.entry-content,.content,' +
+		'.product-page,.product,.product-card,.product-item'
+	);
+    if (mainEl && safeText(mainEl)) {
+        mainContentSent = true;
+        setTimeout(sendContext, 300);
+    }
+});
 observer.observe(document, { subtree: true, childList: true });
 
 const wrap = (fnName) => {

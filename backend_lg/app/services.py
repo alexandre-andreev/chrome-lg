@@ -12,10 +12,10 @@ try:
 except Exception:
     load_dotenv()
 
-# Load non-secret params from params.md (API keys stay in .env.local)
+# Load overrides (non-secret) from params.override.json
 try:
-    from .config import load_params_from_md
-    load_params_from_md()
+    from .config import load_overrides_from_json
+    load_overrides_from_json()
 except Exception:
     pass
 
@@ -47,14 +47,18 @@ def embed_text(text: str, *, is_query: bool = False) -> Optional[list[float]]:
     Uses model 'text-embedding-004'. If GEMINI_API_KEY missing, returns None.
     """
     if not GEMINI_API_KEY:
+        logger.debug("embed_text: GEMINI_API_KEY missing; returning None (is_query=%s, len=%d)", is_query, len(text or ""))
         return None
     try:
         model = "text-embedding-004"
         task_type = "retrieval_query" if is_query else "retrieval_document"
+        logger.debug("embed_text: calling Gemini embeddings (task=%s, len=%d)", task_type, len(text or ""))
         resp = genai.embed_content(model=model, content=text or "", task_type=task_type)
         vec = (resp.get("embedding") if isinstance(resp, dict) else getattr(resp, "embedding", None)) or None
         if isinstance(vec, list) and vec:
+            logger.debug("embed_text: ok (is_query=%s, dim=%d)", is_query, len(vec))
             return vec
+        logger.debug("embed_text: empty vector returned (is_query=%s)", is_query)
         return None
     except Exception as e:
         logger.debug("embed_text failed: %s", e)
@@ -363,13 +367,35 @@ def exa_cache_clear() -> None:
     """Clear entire EXA cache."""
     _exa_cache.clear()
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    return (os.getenv(name, default) or "").lower() in ("1", "true", "yes")
+
+
+def _split_list(name: str) -> List[str]:
+    raw = os.getenv(name, "") or ""
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
 def exa_search(query: str, *, num_results: int = 6, host: Optional[str] = None, lang: Optional[str] = None, use_cache: bool = True) -> List[Dict[str, Any]]:
     if not _exa_client:
         logger.error("Exa client not configured")
         return [{"error": "Exa client not configured"}]
     norm_q = _normalize_query(query)
-    lang = lang or _detect_lang(query)
+    lang = (os.getenv("EXA_LANG") or None) or lang or _detect_lang(query)
     host = (host or "_")
+    # Config
+    cfg_num = int(os.getenv("EXA_NUM_RESULTS", str(num_results)))
+    get_n = int(os.getenv("EXA_GET_CONTENTS_N", "2"))
+    subpages = int(os.getenv("EXA_SUBPAGES", "0"))
+    extras_links = _env_flag("EXA_EXTRAS_LINKS", "1")
+    text_max = int(os.getenv("EXA_TEXT_MAX_CHARS", "1000"))
+    timeout_s = float(os.getenv("EXA_TIMEOUT_S", "10"))
+    excluded = set(_split_list("EXA_EXCLUDE_DOMAINS"))
+    research_enabled = _env_flag("EXA_RESEARCH_ENABLED", "1")
+    research_timeout = int(os.getenv("EXA_RESEARCH_TIMEOUT_S", "15"))
+    summary_enabled = _env_flag("EXA_SUMMARY_ENABLED", "0")
     key = (host, lang, norm_q)
     cache_disabled_env = (os.getenv("EXA_CACHE_DISABLED") or "").lower() in ("1", "true", "yes")
     if use_cache and not cache_disabled_env:
@@ -377,15 +403,55 @@ def exa_search(query: str, *, num_results: int = 6, host: Optional[str] = None, 
         if cached is not None:
             return cached
     try:
+        # site-bias when host present and query lacks site:
+        q = norm_q
+        try:
+            if host and host != "_" and "site:" not in q:
+                q = f"site:{host} {q}"
+        except Exception:
+            pass
         results = _exa_client.search_and_contents(
-            query,
-            num_results=num_results,
-            text={"max_characters": 1000},
+            q,
+            num_results=cfg_num,
+            text={"max_characters": max(300, text_max)},
         )
-        val = [
-            {"title": r.title, "url": r.url, "snippet": r.text}
+        # base list
+        base = [
+            {"title": r.title, "url": r.url, "snippet": r.text or ""}
             for r in results.results
+            if not (r.url and any(r.url.startswith(f"http://{d}") or r.url.startswith(f"https://{d}") for d in excluded))
         ]
+        # enrich top-N with get_contents if requested
+        val = base
+        try:
+            if get_n > 0 and base:
+                tops = [it["url"] for it in base[:get_n] if it.get("url")]
+                if tops:
+                    contents = _exa_client.get_contents(
+                        tops,
+                        subpages=subpages,
+                        extras={"links": 1 if extras_links else 0},
+                        text=True,
+                    )
+                    # Map by URL if available
+                    url_to_text = {}
+                    for c in contents.results if hasattr(contents, 'results') else []:
+                        try:
+                            url_to_text[c.url] = (c.text or "")
+                        except Exception:
+                            continue
+                    # replace snippet for tops
+                    new_val = []
+                    for it in val:
+                        u = it.get("url")
+                        if u and u in url_to_text and url_to_text[u]:
+                            it = dict(it)
+                            it["snippet"] = url_to_text[u][:max(300, text_max)]
+                        new_val.append(it)
+                    val = new_val
+        except Exception:
+            pass
+        # optional summary fallback when model quota hit will be handled in graph; keep val
         if use_cache and not cache_disabled_env:
             _cache_set(key, val)
         return val

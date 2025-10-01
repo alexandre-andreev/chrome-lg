@@ -60,6 +60,70 @@ async function getBackendBaseUrl() {
   });
 }
 
+function renderSettingsForm(container, cfg) {
+  container.innerHTML = '';
+  const fields = [
+    ['STREAMING_ENABLED', 'checkbox', 'Стриминг (/chat_stream).\nВкл: интерактивно, быстрее видны токены; может падать при сетевых сбоях.\nВыкл: стабильнее, ответ одним JSON.'],
+    ['GEMINI_MODEL', 'text', 'Модель Gemini.\nБолее “тяжёлая” (например, 2.5‑flash) — качественнее, медленнее.\n“Лёгкая” (2.0‑flash‑lite) — быстрее, короче.'],
+    ['RAG_ENABLED', 'checkbox', 'Локальный RAG (индекс по хосту).\nВкл: подмешиваем релевантные чанки из индекса.\nВыкл: только текст страницы + поиск EXA.'],
+    ['RAG_TOP_K', 'number', 'Сколько RAG‑чанков в промпт.\nБольше: выше полнота, больше токенов и шум.\nМеньше: компактнее, риск недочитать.'],
+    ['RAG_DEBUG', 'checkbox', 'Отладка RAG (upserted/retrieved) в ответе.'],
+    ['LG_CHUNK_SIZE', 'number', 'Размер чанка страницы.\nБольше: меньше чанков, внутри больше контекста.\nМеньше: точнее локализация фактов, больше чанков.'],
+    ['LG_CHUNK_OVERLAP', 'number', 'Перекрытие чанков.\nБольше: лучше связность, дороже по вычислениям.\nМеньше: быстрее, возможны “обрывы” контекста.'],
+    ['LG_CHUNK_MIN_TOTAL', 'number', 'Порог длины для разбиения.\n0: авто (≈2×CHUNK_SIZE).\nМеньше: чаще режем. Больше: реже режем.'],
+    ['LG_CHUNK_NOTES_MAX_CHUNKS', 'number', 'Сколько чанков использовать для заметок.\nБольше: богаче заметки, выше стоимость.'],
+    ['LG_NOTES_MAX', 'number', 'Максимум заметок, которые генерируем.\nБольше: шире покрытие, возможен “шум”.'],
+    ['LG_NOTES_SHOW_MAX', 'number', 'Сколько заметок включаем в промпт.\nБольше: больше фактов, больше токенов.'],
+    ['LG_SEARCH_MIN_CONTEXT_CHARS', 'number', 'Порог включения EXA.\nМеньше: поиск срабатывает чаще.\nБольше: реже зовём поиск.'],
+    ['LG_PROMPT_TEXT_CHARS', 'number', 'Максимум символов TEXT в промпте.\nБольше: LLM “видит” больше страницы, дороже.'],
+    ['LG_EXA_TIME_BUDGET_S', 'number', 'Лимит времени EXA.\nБольше: шанс лучше найти, медленнее ответ.'],
+    ['LG_SEARCH_RESULTS_MAX', 'number', 'Сколько EXA‑сниппетов в промпт.\nБольше: шире контекст, больше токенов/шум.'],
+    ['LG_SEARCH_SNIPPET_CHARS', 'number', 'Длина EXA‑сниппета.\nБольше: информативнее, дороже по токенам.'],
+    ['LG_ANSWER_MAX_SENTENCES', 'number', 'Ограничитель длины ответа.\n0: без лимита. >0: обрезаем до N предложений.'],
+    ['LG_SEARCH_HEURISTICS', 'checkbox', 'Эвристики “найди в интернете…”.\nВкл: явные формулировки форсят поиск.'],
+    // EXA tuning
+    ['EXA_NUM_RESULTS', 'number', 'Сколько результатов искать. Больше = шире охват, медленнее.'],
+    ['EXA_GET_CONTENTS_N', 'number', 'Сколько топ-URL догружать полным текстом.'],
+    ['EXA_SUBPAGES', 'number', 'Глубина субстраниц при dogruzke contents (0/1).'],
+    ['EXA_EXTRAS_LINKS', 'checkbox', 'Тянуть ссылки из contents (для расширения контекста).'],
+    ['EXA_TEXT_MAX_CHARS', 'number', 'Максимум символов текста на источник.'],
+    ['EXA_LANG', 'text', 'Язык для поиска (auto/ru/en).'],
+    ['EXA_EXCLUDE_DOMAINS', 'text', 'Черный список доменов (через запятую).'],
+    ['EXA_TIMEOUT_S', 'number', 'Таймаут запроса Exa, сек.'],
+    ['EXA_RESEARCH_ENABLED', 'checkbox', 'Разрешить research fallback (когда поиска не хватает).'],
+    ['EXA_RESEARCH_TIMEOUT_S', 'number', 'Таймаут research, сек.'],
+    ['EXA_SUMMARY_ENABLED', 'checkbox', 'Разрешить summary (серверная выжимка Exa)'],
+  ];
+  for (const [key, type] of fields) {
+    const row = document.createElement('label');
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.justifyContent = 'space-between';
+    row.style.gap = '8px';
+    const span = document.createElement('span');
+    span.textContent = key;
+    span.style.fontSize = '12px';
+    span.style.color = '#4a5b76';
+    const input = document.createElement('input');
+    input.id = 'cfg_' + key;
+    // tooltip
+    const def = fields.find(f => f[0] === key);
+    if (def && def[2]) { span.title = def[2]; input.title = def[2]; row.title = def[2]; }
+
+    if (type === 'checkbox') {
+      input.type = 'checkbox';
+      input.checked = ['1','true','yes'].includes(String(cfg?.[key] || '').toLowerCase());
+    } else {
+      input.type = (type === 'text' ? 'text' : 'number');
+      input.value = cfg?.[key] ?? '';
+      input.style.width = (type === 'text' ? '180px' : '110px');
+    }
+    row.appendChild(span);
+    row.appendChild(input);
+    container.appendChild(row);
+  }
+}
+
 async function sendChat(message) {
   const baseUrl = await getBackendBaseUrl();
   if (!/^https?:\/\//i.test(baseUrl)) {
@@ -399,6 +463,43 @@ document.addEventListener('DOMContentLoaded', async () => {
       finally {
         exportBtn.textContent = orig;
         exportBtn.disabled = false;
+      }
+    });
+  }
+  const settingsBtn = document.getElementById('settingsBtn');
+  const modal = document.getElementById('settingsModal');
+  const body = document.getElementById('settingsBody');
+  const btnCancel = document.getElementById('settingsCancel');
+  const btnSave = document.getElementById('settingsSave');
+  if (settingsBtn && modal && body && btnCancel && btnSave) {
+    settingsBtn.addEventListener('click', async () => {
+      try {
+        const baseUrl = await getBackendBaseUrl();
+        const resp = await fetch(baseUrl + '/config');
+        const cfg = await resp.json();
+        renderSettingsForm(body, cfg);
+        modal.style.display = 'block';
+      } catch (_) { modal.style.display = 'block'; }
+    });
+    btnCancel.addEventListener('click', () => { modal.style.display = 'none'; });
+    btnSave.addEventListener('click', async () => {
+      try {
+        const baseUrl = await getBackendBaseUrl();
+        const payload = {};
+        body.querySelectorAll('input[id^="cfg_"]').forEach(inp => {
+          const key = inp.id.replace('cfg_', '');
+          if (inp.type === 'checkbox') {
+            payload[key] = inp.checked ? '1' : '0';
+          } else {
+            if (inp.value !== '') payload[key] = inp.value;
+          }
+        });
+        const resp = await fetch(baseUrl + '/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        modal.style.display = 'none';
+        pushMsg('assistant', 'Параметры применены', { className: 'local' });
+      } catch (e) {
+        pushMsg('assistant', 'Ошибка применения настроек: ' + (e?.message || String(e)));
       }
     });
   }
