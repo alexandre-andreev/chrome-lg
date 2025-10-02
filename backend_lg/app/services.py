@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
+from .langfuse_tracer import trace_gemini_call, trace_exa_search
 
 try:
     # Load from repo root .env.local if present
@@ -153,6 +154,18 @@ def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
             txt = " ".join(texts)
         except Exception:
             txt = ""
+    
+    # Trace to Langfuse
+    try:
+        trace_gemini_call(
+            prompt=prompt,
+            response=txt,
+            model=model_name or GEMINI_MODEL,
+            metadata={"timeout_s": timeout_s, "mode": "text"}
+        )
+    except Exception:
+        pass
+    
     return txt
 
 
@@ -183,9 +196,13 @@ def call_gemini_stream(prompt: str, model_name: Optional[str] = None):
     except Exception as e:
         yield f"[stream-error] {e}"
         return
+    
+    # Collect chunks for Langfuse tracing
+    full_response = []
     for chunk in resp:
         try:
             if getattr(chunk, "text", None):
+                full_response.append(chunk.text)
                 yield chunk.text
             else:
                 parts = []
@@ -193,9 +210,22 @@ def call_gemini_stream(prompt: str, model_name: Optional[str] = None):
                     if getattr(p, "text", None):
                         parts.append(p.text)
                 if parts:
-                    yield " ".join(parts)
+                    text = " ".join(parts)
+                    full_response.append(text)
+                    yield text
         except Exception:
             continue
+    
+    # Trace to Langfuse after streaming completes
+    try:
+        trace_gemini_call(
+            prompt=prompt,
+            response="".join(full_response),
+            model=model_name or GEMINI_MODEL,
+            metadata={"mode": "stream"}
+        )
+    except Exception:
+        pass
 
 
 def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
@@ -454,6 +484,22 @@ def exa_search(query: str, *, num_results: int = 6, host: Optional[str] = None, 
         # optional summary fallback when model quota hit will be handled in graph; keep val
         if use_cache and not cache_disabled_env:
             _cache_set(key, val)
+        
+        # Trace to Langfuse
+        try:
+            trace_exa_search(
+                query=query,
+                results=val,
+                metadata={
+                    "host": host,
+                    "lang": lang,
+                    "num_results": cfg_num,
+                    "cached": False
+                }
+            )
+        except Exception:
+            pass
+        
         return val
     except Exception as e:
         logger.exception("Exa search failed: %s", e)

@@ -5,6 +5,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 
 from .services import embed_text
+from .langfuse_tracer import trace_rag_operation
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,18 @@ def upsert_page(host: str, url: str, title: str, text: str, *, chunk_size: int, 
         except Exception as e:
             logger.debug("RAG save index failed: %s", e)
             return 0
+    
+    # Trace to Langfuse
+    try:
+        trace_rag_operation(
+            operation="upsert",
+            input_data={"host": host, "url": url, "text_len": len(text), "chunk_size": chunk_size},
+            output_data={"chunks_added": added, "total_chunks": len(existing)},
+            metadata={"title": title[:100] if title else ""}
+        )
+    except Exception:
+        pass
+    
     return added
 
 
@@ -191,6 +204,18 @@ def retrieve_top_k(host: str, query: str, *, k: int = 5) -> List[Dict[str, Any]]
             "title": it.get("title") or "",
             "score": float(s),
         })
+    
+    # Trace to Langfuse
+    try:
+        trace_rag_operation(
+            operation="retrieve",
+            input_data={"host": host, "query": query, "k": k},
+            output_data={"retrieved_count": len(out), "top_scores": [it["score"] for it in out[:3]]},
+            metadata={"index_size": len(items)}
+        )
+    except Exception:
+        pass
+    
     return out
 
 

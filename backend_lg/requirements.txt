@@ -6,4 +6,4 @@ exa_py>=1.0.15
 langgraph>=0.2.34
 langchain-core>=0.3.7
 requests>=2.31.0
-langfuse>=2.36.0
+langfuse>=2.0,<3.0

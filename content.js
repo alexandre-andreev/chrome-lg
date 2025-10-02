@@ -105,27 +105,66 @@ function collectPageContext() {
 		const ogDesc = firstContent('meta[property="og:description"]') || firstContent('meta[name="description"]') || firstContent('meta[name="twitter:description"]');
 
 		// Prefer main/article/product containers for page text
-		// Add site-specific selectors for Habr, Medium, etc.
+		// Add site-specific selectors for various content sites
         let mainEl = document.querySelector(
-			'main,[role="main"],article,' +
+			// Common HTML5
+			'main,[role="main"],article,[role="article"],' +
+			// Blog platforms
 			'.article__content,.tm-article-body,.post__text,' + // Habr
 			'.post-content,.entry-content,.content,' + // Medium, WordPress
-			'.product-page,.product,.product-card,.product-item' // E-commerce
+			// Documentation & Atlassian
+			'.wiki-content,.article-content,.page-content,' + // Confluence
+			'[data-testid="page-content"],.ak-renderer-document,' + // Atlassian
+			// E-commerce
+			'.product-page,.product,.product-card,.product-item'
 		);
         let mainText = safeText(mainEl);
+        
+        // Debug: log what selector matched
+        if (mainEl) {
+			console.log('[Chrome-bot] Main content selector matched:', mainEl.className || mainEl.tagName);
+        }
+        
         if (!mainText) {
-			// Try article body directly (for Habr v2)
+			// Try article body directly
 			const article = document.querySelector('article');
-			if (article) mainText = safeText(article);
+			if (article) {
+				mainText = safeText(article);
+				console.log('[Chrome-bot] Fallback to <article>, length:', mainText.length);
+			}
         }
-        if (!mainText) {
-            // broader fallback: prefer documentElement to capture SPA-rendered content
+        
+        if (!mainText || mainText.length < 200) {
+			// Try removing scripts, styles, nav, footer first
+			const clone = document.body.cloneNode(true);
+			const remove = clone.querySelectorAll('script,style,nav,header,footer,[role="navigation"],[role="banner"]');
+			remove.forEach(el => el.remove());
+			mainText = safeText(clone);
+			console.log('[Chrome-bot] Fallback to cleaned body, length:', mainText.length);
+        }
+        
+        if (!mainText || mainText.length < 100) {
+            // Last resort: full document
             mainText = safeText(document.documentElement);
-            if (!mainText) {
-                mainText = safeText(document.body);
-            }
+            console.log('[Chrome-bot] Last resort: documentElement, length:', mainText.length);
         }
-		mainText = (mainText || '').slice(0, 30000);
+        
+		// Clean up text: remove excessive whitespace, DIAG markers, etc.
+		mainText = (mainText || '')
+			.replace(/DIAG[\s\S]*?(?=\n|$)/g, '') // Remove DIAG lines
+			.replace(/\n{3,}/g, '\n\n') // Max 2 newlines
+			.replace(/[ \t]{2,}/g, ' ') // Collapse spaces
+			.trim()
+			.slice(0, 30000);
+		
+		console.log('[Chrome-bot] Final text length:', mainText.length);
+		
+		// Warn if text is suspiciously short
+		if (mainText.length < 200) {
+			console.warn('[Chrome-bot] WARNING: Very short text extracted:', mainText.length, 'chars');
+			console.warn('[Chrome-bot] URL:', url);
+			console.warn('[Chrome-bot] Sample:', mainText.slice(0, 100));
+		}
 
         // Extract product data from JSON-LD if present
 		const products = parseJsonLdProducts();

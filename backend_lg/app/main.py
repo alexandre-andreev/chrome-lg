@@ -19,6 +19,7 @@ except Exception:
 from .graph import app_graph as _compiled_graph, GRAPH_VIZ_PATH
 from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream, call_gemini_text, embed_text
 from .config import load_overrides_from_json, save_overrides_to_json
+from .langfuse_tracer import get_langfuse_handler, is_enabled as langfuse_is_enabled, flush as langfuse_flush
 import threading
 import importlib
 
@@ -85,12 +86,25 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     if not user_message:
         raise HTTPException(status_code=400, detail="Empty message")
 
+    # Log page context for debugging
+    page_text = (payload.page_text or "").strip()
+    logger.info("Chat request: message=%r url=%r text_len=%d", 
+                user_message[:50], payload.page_url, len(page_text))
+    
+    # Warn if page text looks suspicious
+    if page_text and "DIAG" in page_text[:500]:
+        logger.warning("Page text contains DIAG markers (possible extraction issue). Sample: %s", 
+                      page_text[:200])
+    
+    if len(page_text) < 200 and payload.page_url:
+        logger.warning("Short page text (%d chars) for URL: %s", len(page_text), payload.page_url)
+
     state_in = {
         "user_message": user_message,
         "page": {
             "url": payload.page_url,
             "title": payload.page_title,
-            "text": payload.page_text,
+            "text": page_text,
         },
         "force_search": bool(payload.force_search or False),
     }
@@ -112,7 +126,13 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                 pass
             _LAST_HOST = host
 
-        out = app.state.app_graph.invoke(state_in)
+        # Invoke LangGraph with Langfuse tracing if enabled
+        langfuse_handler = get_langfuse_handler()
+        if langfuse_handler:
+            out = app.state.app_graph.invoke(state_in, config={"callbacks": [langfuse_handler]})
+        else:
+            out = app.state.app_graph.invoke(state_in)
+        
         answer = (out.get("final_answer") or "").strip()
         sources = out.get("search_results") or []
         used_search = bool(out.get("used_search"))
@@ -178,7 +198,14 @@ async def chat_stream(payload: ChatRequest):
     try:
         # Run only prep/context/search/compose without call_gemini
         from .graph import build_prompt_fast
-        out = build_prompt_fast(state_in)  # returns state with draft_answer
+        
+        # Use Langfuse tracing if enabled
+        langfuse_handler = get_langfuse_handler()
+        if langfuse_handler:
+            out = build_prompt_fast(state_in, config={"callbacks": [langfuse_handler]})
+        else:
+            out = build_prompt_fast(state_in)
+        
         prompt = out.get("draft_answer") or ""
         sources = out.get("search_results") or []
         used_search = bool(out.get("used_search"))

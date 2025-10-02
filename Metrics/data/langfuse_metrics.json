@@ -1,0 +1,810 @@
+{
+  "timestamp": "2025-10-01T23:03:36.214815",
+  "total_traces": 99,
+  "latency": {},
+  "token_usage": {
+    "avg_input": 0,
+    "avg_output": 0,
+    "avg_total": 0
+  },
+  "operation_counts": {
+    "gemini_generate": 65,
+    "rag_retrieve": 16,
+    "exa_search": 13,
+    "rag_upsert": 5
+  },
+  "traces": [
+    {
+      "id": "1ce5e2a5-0d27-45e4-98ed-0d8eb5dbfb6f",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 20:00:46.828000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "96ae6a38-1a64-4623-a57f-05e6ae54b0f0",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 20:00:46.018000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "e8665f55-ad3c-45e1-a064-0a954018a4e2",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 20:00:45.621000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "79022a68-78ea-438f-bb59-551c7d8be8c4",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:49:34.004000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "6f384255-5547-4204-a890-a16ad54e39c8",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:49:33.607000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "df71a17c-e764-4ea9-b477-2273ea0179bd",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:49:33.206000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "cdde6729-3eee-487c-9121-2d325fef376f",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:49:02.751000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "d6459e76-7e8f-4432-ab6a-3bfd4c946918",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:49:02.245000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "fc06c96d-6bf8-40c7-a33a-dfd7faca3c3e",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:49:01.860000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "1b593a5d-2e26-406d-bcb4-d8514197055e",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:48:56.209000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "359f0a02-40a6-4eb8-829b-56219dfcca49",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:48:55.482000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "2f5f0289-ca82-49f8-bb8c-76cbaf7d3b16",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:48:11.183000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "fb898791-a817-4f5d-8b3d-54b5d4b1e157",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:48:10.139000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "a981f616-2032-44ef-8ff9-ba7bdc1eabf7",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:48:09.725000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "ce0fbdfd-3ea0-437d-beb5-36d7bbdc69d7",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:48:05.524000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "992e3a97-e7fb-4f87-943f-af7209835692",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:48:04.941000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "7d2cc617-e4cb-46b4-890f-7b63b1dd242c",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:16:35.876000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "a9fb8eed-6d05-4367-939c-df43e0f2c9c3",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:16:34.881000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "87388f59-95e3-476a-8c5e-f477fc855c8e",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:16:27.448000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "be2807ac-bfa2-4962-b28a-ec5e1baabd9e",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:16:26.845000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "96dd6328-7b17-41ac-a87a-2ab477e0c05d",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:15:46.078000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "52b758ca-0fdd-445f-a9f6-c3be43259a98",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:15:44.824000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "d2c743f1-9d66-4a0a-abb2-bce282705639",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:15:10.636000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "d6a94dbc-cbf2-4ac4-8b1d-3ea8492eafcc",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:15:09.859000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "0b4dae3a-5eee-4dd1-9eac-3ff7226a906a",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:15:09.464000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "68a2f45b-d609-4409-bc2b-a4afc2fefca2",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:15:03.792000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "142b5b2e-540a-4feb-85fd-84ac671a1ce5",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:15:03.083000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "0e261694-d939-45bb-813b-ba6b66ba7664",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:14:16.294000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "254f7cef-23d5-461b-94ad-41d667f211ae",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:14:15.425000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "95f2f488-ba04-466c-9066-4671763d2b40",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:14:15.016000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "ef74eba8-a531-432c-8f1f-b8ee2b025b72",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:14:11.640000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "a8b84b20-f379-4678-a848-2933784029d9",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:14:10.918000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "7037836a-00d4-49fb-ab24-41c04f67ccd2",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:10:20.356000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "fce2d749-7bd3-4e63-acd9-13879f804ae3",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:10:19.673000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "6d6080c8-7861-4841-bca4-bfa80ece1787",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:10:19.250000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "1fca5643-3fab-4c50-8b84-c7dbc6b7d829",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:10:15.507000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "59dcf01f-fc4e-470f-b0b3-e6a3237e0962",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:10:14.794000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "879c82a8-5a60-45f9-8a57-af651e2e4fca",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:09:24.613000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "a001accd-4781-4d14-98c9-8aa3189a5b83",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:09:23.808000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "15481e1f-59b2-4b14-ae90-38f79bf2485e",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:09:23.422000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "aaeff63b-f878-46f5-bee8-7d7bfa0d244c",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:09:19.459000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "9fd4a71c-3063-473e-a503-c362931baedf",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:09:18.583000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "eabdd2a4-d3e9-49d6-8062-e63aef7ad0d8",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:08:33.575000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "bbe6bd5d-ab07-4443-887a-8927edd1cce5",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:43.372000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "207ea004-7b9e-406c-83ec-84e4e11d3931",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:05:42.650000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "6b347af3-51d7-47c7-94a8-594aba8485bb",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:42.127000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "402fe230-ef4f-448d-8aa7-69861906ec03",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:10.606000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "9dddfda4-426c-44a0-989d-5c6be397db0f",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:05:09.501000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "3dcd06bb-6f9b-4ea6-9092-5ab84e9cf7bc",
+      "name": "rag_upsert",
+      "timestamp": "2025-10-01 19:05:09.095000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "791d9af8-6535-4ad8-938f-1e07b461373c",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:05:09.085000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "41d7a0f8-ac68-4771-a9df-38e55957b443",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:04.868000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "e7767f47-79a9-4af7-902c-3377b20ffdb2",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:04.113000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "dbbcb3d9-e5fe-485f-a490-623b993f0989",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:03.200000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "7d07e53f-6302-4524-8a38-e5b891c2c9bd",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:05:02.240000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "3e37191c-bd20-42c5-bde7-cb22cb690c2e",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:04:14.570000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "861dbc79-db90-4a2f-ae8e-c513d195b02a",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:04:13.136000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "3b7d252b-a603-4d78-b45e-71860cff4525",
+      "name": "rag_upsert",
+      "timestamp": "2025-10-01 19:04:12.747000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "c38d8f63-b03b-4988-8f18-3963d80f73ba",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:04:03.574000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "036d250f-f854-46f0-8a45-d29846056047",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:04:02.799000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "1d4d6341-1310-4450-aeb7-2f340b5ba01e",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:04:02.188000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "06a25d83-ee86-4d3a-891b-1b486f084db5",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:02:56.459000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "7be9bf2a-ad26-4707-82ab-060b49d8ddcb",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:02:55.521000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "9ed61d87-4db5-44c9-8fed-6975a54ebf40",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:02:55.143000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "fe47eb7b-ba20-44e3-86d8-07e9fe4aacff",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:02:49.498000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "1ae1e7aa-a843-4608-89ce-2b771ec9a978",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:02:48.546000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "edcece35-87a7-4cf4-8abd-06a5039cb33b",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:01:39.075000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "36d3f5b8-9e45-4b04-a07d-916f64a09653",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:01:26.246000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "5c53c4d8-775b-4b42-9754-4ca26f1a0e2f",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 19:01:25.326000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "07ed3a7c-0534-4fc4-9487-61853feb85f5",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 19:01:24.938000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "e08c084b-cc6a-4ab6-bc1c-356198c5ecf6",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:01:21.372000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "b068ccb2-3794-4db5-b6a5-c758200b4d1b",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 19:01:20.584000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "3f85db15-7d9a-443a-82c0-26c5b6db70ee",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:58:21.949000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "186393b8-ff1c-4e32-84c2-0ff41845a4bf",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 18:58:20.861000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "fbace473-af0c-4e76-944a-2a62e78f49a9",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:58:16.211000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "7d9fa518-4d49-4423-b7f3-f60752a1e085",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:58:15.423000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "d4c53432-f3fd-4717-b455-60226203a030",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:57:35.303000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "90bcaecc-59f3-4872-9100-bbe319f6ddf8",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 18:57:33.712000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "52200ee5-bed7-4430-8651-ef06bd3cffb5",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:57:30.126000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "c9b8c1ab-7c07-41fe-a54b-1dbbb2058422",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:57:29.454000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "cf15f3a4-9c69-4b96-99dc-17f588998069",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:24.619000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "4ff16984-427f-4767-b2b0-bb9d13de1534",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 18:56:23.704000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "7ef6d92a-445f-4c5b-8c19-8d7edcab3ffe",
+      "name": "rag_upsert",
+      "timestamp": "2025-10-01 18:56:23.307000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "8d40f992-e44e-483c-a851-90fa950e98e2",
+      "name": "exa_search",
+      "timestamp": "2025-10-01 18:56:23.300000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "35d14bc8-abc6-4bdf-9433-b57b93978380",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:17.763000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "715ae21d-15b8-42c7-939d-99d7c05ebf58",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:16.898000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "97a4ae2a-939a-4423-9acb-8d5ee5fca845",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:16.250000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "0b7cbc7a-a341-40c1-95cb-07aa7acf1cb2",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:15.658000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "41f59828-98fd-4871-8f9f-4ba87f0bd06e",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:02.649000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "9a98497c-9e33-4e26-9496-33ab65a9a283",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 18:56:01.341000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "f0309ae5-d037-4470-bebd-9af3c95167da",
+      "name": "rag_upsert",
+      "timestamp": "2025-10-01 18:56:00.952000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "1227dc1b-8247-4078-98a6-d3cf0363559a",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:00.944000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "28ccfe09-30fa-49e0-a0e1-65391da30301",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:56:00.030000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "ec800b84-fdfa-44ea-94ab-8c8034806921",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:55:59.351000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "a5ee6aa6-94a6-4359-b2c2-78c4fa8427cd",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:39:52.956000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "98a1e7b4-29e3-467a-83b0-276d09c80e80",
+      "name": "rag_retrieve",
+      "timestamp": "2025-10-01 18:39:51.975000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "41bc6cda-d19a-4a77-93fb-f173b13a476d",
+      "name": "rag_upsert",
+      "timestamp": "2025-10-01 18:39:51.582000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "4ef3a895-1e97-4cf2-8b7d-d3c97177fc2d",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:39:51.566000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "34681b34-ed74-4a33-96c7-6d7832512460",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:39:50.931000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    },
+    {
+      "id": "a20d750d-561e-473f-8e2f-bcbd950155db",
+      "name": "gemini_generate",
+      "timestamp": "2025-10-01 18:39:50.400000+00:00",
+      "latency": null,
+      "tokens": {},
+      "metadata": {}
+    }
+  ]
+}

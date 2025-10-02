@@ -261,6 +261,20 @@ def build_search_query(state: AgentState) -> AgentState:
         state["search_query"] = ""
         return state
 
+    # Проверка контекста ДО вызова LLM
+    # Если контекст достаточно большой и эвристики отключены, не запускать поиск
+    page_text_len = len((state.get("page", {}).get("text") or ""))
+    if not _HEURISTICS_FLAG and page_text_len >= LG_SEARCH_MIN_CONTEXT_CHARS:
+        try:
+            logger.info("Skipping search: heuristics disabled and page_text_len=%d >= %d", 
+                       page_text_len, LG_SEARCH_MIN_CONTEXT_CHARS)
+        except Exception:
+            pass
+        state["need_search"] = False
+        state["search_queries"] = []
+        state["search_query"] = ""
+        return state
+    
     # LLM-классификация необходимости поиска (быстрая развилка)
     try:
         assess = assess_need_search_llm(user, state.get("page") or {}, state.get("notes") or [])
