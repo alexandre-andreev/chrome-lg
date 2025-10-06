@@ -115,9 +115,14 @@ def sanitize_answer(text: str) -> str:
     return text
 
 
-def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
+def call_gemini_text(prompt: str, model_name: Optional[str] = None, timeout_s: Optional[float] = None) -> str:
     """Generate text with Gemini. If GEMINI_API_KEY is missing, return an empty string
     so the caller can fall back without raising 500.
+    
+    Args:
+        prompt: Text prompt for generation
+        model_name: Optional model name override
+        timeout_s: Optional timeout override (default: 20s from env or param)
     """
     if not GEMINI_API_KEY:
         logger.warning("GEMINI_API_KEY is missing; returning empty text fallback")
@@ -127,7 +132,9 @@ def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
         system_instruction=SYSTEM_INSTRUCTION,
     )
     # Hard timeout for generation to avoid hangs on network/SDK issues
-    timeout_s = float(os.getenv("GEMINI_TIMEOUT_S", "20"))
+    if timeout_s is None:
+        timeout_s = float(os.getenv("GEMINI_TIMEOUT_S", "20"))
+    timeout_s = float(timeout_s)
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             fut = pool.submit(model.generate_content, prompt)
@@ -457,30 +464,135 @@ def exa_search(query: str, *, num_results: int = 6, host: Optional[str] = None, 
             if get_n > 0 and base:
                 tops = [it["url"] for it in base[:get_n] if it.get("url")]
                 if tops:
-                    contents = _exa_client.get_contents(
-                        tops,
-                        subpages=subpages,
-                        extras={"links": 1 if extras_links else 0},
-                        text=True,
-                    )
-                    # Map by URL if available
-                    url_to_text = {}
+                    # Load new get_contents parameters
+                    highlights_enabled = _env_flag("EXA_HIGHLIGHTS_ENABLED", "1")
+                    highlights_per_url = int(os.getenv("EXA_HIGHLIGHTS_PER_URL", "2"))
+                    highlights_sentences = int(os.getenv("EXA_HIGHLIGHTS_NUM_SENTENCES", "2"))
+                    highlights_query = os.getenv("EXA_HIGHLIGHTS_QUERY", "").strip()
+                    
+                    summary_query = os.getenv("EXA_SUMMARY_QUERY", "").strip()
+                    
+                    livecrawl_mode = os.getenv("EXA_LIVECRAWL", "fallback").strip()
+                    livecrawl_timeout = int(os.getenv("EXA_LIVECRAWL_TIMEOUT_MS", "10000"))
+                    
+                    image_links_n = int(os.getenv("EXA_EXTRAS_IMAGE_LINKS", "0"))
+                    include_html = _env_flag("EXA_INCLUDE_HTML_TAGS", "0")
+                    
+                    # Build text parameters
+                    text_params = {
+                        "maxCharacters": max(300, text_max),
+                        "includeHtmlTags": include_html
+                    }
+                    
+                    # Build highlights parameters
+                    highlights_params = None
+                    if highlights_enabled:
+                        highlights_params = {
+                            "highlightsPerUrl": highlights_per_url,
+                            "numSentences": highlights_sentences
+                        }
+                        if highlights_query:
+                            highlights_params["query"] = highlights_query
+                    
+                    # Build summary parameters
+                    summary_params = None
+                    if summary_enabled:
+                        summary_params = {}
+                        if summary_query:
+                            summary_params["query"] = summary_query
+                    
+                    # Build extras parameters
+                    extras_params = {}
+                    if extras_links:
+                        extras_params["links"] = 1
+                    if image_links_n > 0:
+                        extras_params["imageLinks"] = image_links_n
+                    
+                    # Call get_contents with all parameters
+                    # Note: Python SDK uses snake_case for parameter names
+                    get_contents_kwargs = {
+                        "text": text_params,
+                        "subpages": subpages,
+                        "livecrawl": livecrawl_mode,
+                    }
+                    
+                    # Add optional parameters only if they are set
+                    if highlights_params is not None:
+                        get_contents_kwargs["highlights"] = highlights_params
+                    if summary_params is not None:
+                        get_contents_kwargs["summary"] = summary_params
+                    if extras_params:
+                        get_contents_kwargs["extras"] = extras_params
+                    # livecrawl_timeout must be int (milliseconds in SDK, despite docs saying seconds)
+                    if livecrawl_timeout and livecrawl_timeout > 0:
+                        get_contents_kwargs["livecrawl_timeout"] = int(livecrawl_timeout)
+                    
+                    contents = _exa_client.get_contents(tops, **get_contents_kwargs)
+                    
+                    # Map enriched data by URL
+                    url_to_enriched = {}
                     for c in contents.results if hasattr(contents, 'results') else []:
                         try:
-                            url_to_text[c.url] = (c.text or "")
-                        except Exception:
+                            enriched = {
+                                "text": (c.text or "")[:text_max] if hasattr(c, "text") else "",
+                                "highlights": list(getattr(c, "highlights", [])) if hasattr(c, "highlights") else [],
+                                "highlightScores": list(getattr(c, "highlightScores", [])) if hasattr(c, "highlightScores") else [],
+                                "summary": (getattr(c, "summary", "") or "") if hasattr(c, "summary") else "",
+                                "subpages": [],
+                                "extras": {}
+                            }
+                            
+                            # Process subpages
+                            if hasattr(c, "subpages") and c.subpages:
+                                for sub in (c.subpages[:3] if isinstance(c.subpages, list) else []):
+                                    try:
+                                        subpage_data = {
+                                            "url": getattr(sub, "url", "") or "",
+                                            "title": getattr(sub, "title", "") or "",
+                                            "text": (getattr(sub, "text", "") or "")[:500]
+                                        }
+                                        enriched["subpages"].append(subpage_data)
+                                    except Exception:
+                                        continue
+                            
+                            # Process extras
+                            if hasattr(c, "extras"):
+                                extras_obj = c.extras
+                                try:
+                                    enriched["extras"] = {
+                                        "links": list(getattr(extras_obj, "links", [])) if hasattr(extras_obj, "links") else [],
+                                        "imageLinks": list(getattr(extras_obj, "imageLinks", [])) if hasattr(extras_obj, "imageLinks") else []
+                                    }
+                                except Exception:
+                                    pass
+                            
+                            url_to_enriched[c.url] = enriched
+                        except Exception as ex:
+                            logger.debug("Failed to process get_contents result: %s", ex)
                             continue
-                    # replace snippet for tops
+                    
+                    # Merge enriched data into base results
                     new_val = []
                     for it in val:
                         u = it.get("url")
-                        if u and u in url_to_text and url_to_text[u]:
+                        if u and u in url_to_enriched:
+                            enriched = url_to_enriched[u]
                             it = dict(it)
-                            it["snippet"] = url_to_text[u][:max(300, text_max)]
+                            # Use highlights as primary content if available, fallback to text
+                            if enriched["highlights"]:
+                                it["snippet"] = " | ".join(enriched["highlights"][:2])
+                            elif enriched["text"]:
+                                it["snippet"] = enriched["text"][:max(300, text_max)]
+                            # Add new fields
+                            it["highlights"] = enriched["highlights"]
+                            it["highlightScores"] = enriched["highlightScores"]
+                            it["summary"] = enriched["summary"]
+                            it["subpages"] = enriched["subpages"]
+                            it["extras"] = enriched["extras"]
                         new_val.append(it)
                     val = new_val
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.exception("get_contents enrichment failed: %s", ex)
         # optional summary fallback when model quota hit will be handled in graph; keep val
         if use_cache and not cache_disabled_env:
             _cache_set(key, val)

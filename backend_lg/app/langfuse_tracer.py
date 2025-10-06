@@ -4,6 +4,17 @@ Langfuse tracing integration for LangGraph monitoring and cost tracking.
 import os
 import logging
 from typing import Optional, Dict, Any
+
+# Suppress langfuse warnings BEFORE import
+import warnings
+warnings.filterwarnings("ignore", message=".*langchain.*")
+
+# Set logging level BEFORE importing Langfuse
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("langfuse").setLevel(logging.CRITICAL)
+logging.getLogger("langfuse").addHandler(logging.NullHandler())
+logging.getLogger("langfuse").propagate = False
+
 from langfuse import Langfuse
 try:
     from langfuse.decorators import observe, langfuse_context
@@ -56,8 +67,8 @@ def get_langfuse_handler():
                 host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
             )
         except ImportError:
-            # Fallback for older versions
-            logger.warning("CallbackHandler not available in this Langfuse version")
+            # Fallback for older versions (no langchain integration)
+            logger.debug("CallbackHandler not available in this Langfuse version (langchain not installed)")
             return None
     except Exception as e:
         logger.exception("Failed to create Langfuse handler: %s", e)

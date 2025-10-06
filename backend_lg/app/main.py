@@ -47,6 +47,7 @@ class ChatResponse(BaseModel):
     decision: str | None = None
     graph_trace: List[str] | None = None
     debug: Dict[str, Any] | None = None
+    timings: Dict[str, float] | None = None  # node_name -> seconds
 
 
 class ExportResponse(BaseModel):
@@ -168,6 +169,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
             decision=decision,
             graph_trace=graph_trace,
             debug=debug,
+            timings=out.get("timings", {}),
         )
     except Exception as e:
         logger.exception("Error in /chat: %s", e)
@@ -281,11 +283,20 @@ _ALLOWED_CONFIG_KEYS = {
     "LG_ANSWER_MAX_SENTENCES",
     "LG_SEARCH_HEURISTICS",
     "GEMINI_MODEL",
+    "GEMINI_TIMEOUT_S",
+    "GEMINI_EXPORT_TIMEOUT_S",
     # EXA tuning
     "EXA_NUM_RESULTS", "EXA_GET_CONTENTS_N", "EXA_SUBPAGES", "EXA_EXTRAS_LINKS",
     "EXA_TEXT_MAX_CHARS", "EXA_LANG", "EXA_EXCLUDE_DOMAINS", "EXA_TIMEOUT_S",
     "EXA_RESEARCH_ENABLED", "EXA_RESEARCH_TIMEOUT_S", "EXA_SUMMARY_ENABLED",
+    # EXA get_contents API parameters
+    "EXA_HIGHLIGHTS_ENABLED", "EXA_HIGHLIGHTS_PER_URL", "EXA_HIGHLIGHTS_NUM_SENTENCES",
+    "EXA_HIGHLIGHTS_QUERY", "EXA_SUMMARY_QUERY",
+    "EXA_LIVECRAWL", "EXA_LIVECRAWL_TIMEOUT_MS",
+    "EXA_EXTRAS_IMAGE_LINKS", "EXA_INCLUDE_HTML_TAGS",
     "RAG_INDEX_DIR",
+    # LangGraph visualization
+    "LANGGRAPH_VIZ", "LANGGRAPH_VIZ_FORMAT", "LANGGRAPH_VIZ_PATH",
 }
 
 
@@ -448,8 +459,26 @@ async def export_md(payload: Dict[str, Any]) -> ExportResponse:
     page_url = (payload.get("page_url") or "").strip()
     page_title = (payload.get("page_title") or "").strip()
     page_text = (payload.get("page_text") or "").strip()
-    if not page_text and not page_title and not page_url:
-        raise HTTPException(status_code=400, detail="Empty page content")
+    
+    # Detailed logging for debugging
+    logger.info("export_md request: url=%r title=%r text_len=%d", 
+                page_url, page_title, len(page_text))
+    
+    if not page_text:
+        # More informative error when page_text is missing
+        error_msg = (
+            "Текст страницы не получен. Возможные причины:\n"
+            "1. Chrome-расширение не извлекло контент страницы\n"
+            "2. Страница загружается динамически (JavaScript)\n"
+            "3. Страница заблокирована (требует авторизацию)\n\n"
+            f"URL: {page_url}\n"
+            f"Title: {page_title}"
+        )
+        logger.warning("export_md: empty page_text for url=%s", page_url)
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    if not page_title and not page_url:
+        raise HTTPException(status_code=400, detail="Empty page metadata")
     # Build markdown using Gemini if available; otherwise fallback to simple formatting
     title = page_title or (page_url or "Страница").split("/")[-1]
     safe_title = re.sub(r"[^\w\-а-яА-ЯёЁ ]+", "_", title).strip() or "page"
@@ -459,13 +488,19 @@ async def export_md(payload: Dict[str, Any]) -> ExportResponse:
     # Try literary processing via Gemini if key present
     try:
         if GEMINI_API_KEY:
+            # Limit text size for export to avoid context overflow
+            # Use smaller chunk for export than for chat (15k vs 20k)
+            text_for_export = page_text[:15000]
             prompt = (
                 "Суммируй и структурируй содержимое веб-страницы в Markdown. "
                 "Добавь оглавление, основные разделы, списки, важные факты и определения. "
                 "Не вставляй рекламные блоки, меню и навигацию. Язык — исходный.\n\n"
-                f"TITLE: {page_title}\nURL: {page_url}\nTEXT:\n{page_text[:20000]}"
+                f"TITLE: {page_title}\nURL: {page_url}\nTEXT:\n{text_for_export}"
             )
-            generated = call_gemini_text(prompt)
+            # Use longer timeout for export (configurable, default 40s)
+            # Export typically requires more processing time than chat
+            export_timeout = float(os.getenv("GEMINI_EXPORT_TIMEOUT_S", "40"))
+            generated = call_gemini_text(prompt, timeout_s=export_timeout)
             if generated:
                 md_content = generated
             else:

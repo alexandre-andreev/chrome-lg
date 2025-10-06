@@ -2,6 +2,7 @@ from typing import TypedDict, Optional, List, Dict, Any
 import re
 import os
 import logging
+import time
 from urllib.parse import urlparse
 # Ensure env is loaded early so visualization flags are available on import
 try:
@@ -53,6 +54,9 @@ class AgentState(TypedDict, total=False):
     missing_entities_on_page: Optional[bool]
     focus: List[str]
     search_attempts: Optional[int]
+    # Timing metrics
+    timings: Dict[str, float]  # node_name -> elapsed_seconds
+    node_start_time: Optional[float]  # for tracking current node execution
 
 
 # Feature flags and tunables (env)
@@ -70,10 +74,34 @@ LG_SEARCH_SNIPPET_CHARS = int(os.environ.get("LG_SEARCH_SNIPPET_CHARS", "300"))
 LG_NOTES_SHOW_MAX = int(os.environ.get("LG_NOTES_SHOW_MAX", "8"))
 LG_ANSWER_MAX_SENTENCES = int(os.environ.get("LG_ANSWER_MAX_SENTENCES", "0"))
 
+def _track_timing(node_name: str):
+    """Decorator to track node execution time."""
+    def decorator(func):
+        def wrapper(state: AgentState) -> AgentState:
+            start_time = time.time()
+            result = func(state)
+            elapsed = time.time() - start_time
+            
+            # Initialize timings dict if not present
+            if "timings" not in result:
+                result["timings"] = {}
+            result["timings"][node_name] = elapsed
+            
+            # Log timing
+            logger.debug("Node %s completed in %.3f seconds", node_name, elapsed)
+            
+            return result
+        return wrapper
+    return decorator
+
+@_track_timing("prepare_context")
 def prepare_context(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("prepare_context")
     state["graph_trace"] = trace
+    # Initialize timings if not present
+    if "timings" not in state:
+        state["timings"] = {}
     page = state.get("page") or {}
     txt = (page.get("text") or "")
     # Лёгкая очистка текста страницы от служебных строк/навигации/шапок
@@ -135,6 +163,7 @@ def need_chunk(state: AgentState) -> str:
     return "no_chunk"
 
 
+@_track_timing("chunk_notes")
 def chunk_notes(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("chunk_notes")
@@ -211,6 +240,7 @@ def _prepare_focus(state: AgentState) -> None:
         state["focus"] = focus
 
 
+@_track_timing("build_search_query")
 def build_search_query(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("build_search_query")
@@ -328,6 +358,7 @@ def build_search_query(state: AgentState) -> AgentState:
     return state
 
 
+@_track_timing("exa_search")
 def exa_search_node(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("exa_search")
@@ -390,6 +421,7 @@ def exa_search_node(state: AgentState) -> AgentState:
     return state
 
 
+@_track_timing("compose_prompt")
 def compose_prompt(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("compose_prompt")
@@ -494,15 +526,63 @@ def compose_prompt(state: AgentState) -> AgentState:
         parts.append("КОНТЕКСТ СТРАНИЦЫ:\n" + "\n".join(lines))
     results = state.get("search_results") or []
     if results:
-        snippets = [ (r.get("snippet") or "").replace("\n", " ")[: max(100, LG_SEARCH_SNIPPET_CHARS) ] for r in results[: max(1, LG_SEARCH_RESULTS_MAX) ] ]
-        snippets = [s for s in snippets if s]
-        if snippets:
-            parts.append("РЕЗУЛЬТАТЫ ПОИСКА:\n- " + "\n- ".join(snippets))
+        search_lines = []
+        for idx, r in enumerate(results[: max(1, LG_SEARCH_RESULTS_MAX)], 1):
+            result_parts = []
+            
+            # Title and URL
+            title = (r.get("title") or "Источник").strip()
+            url = (r.get("url") or "").strip()
+            result_parts.append(f"[{idx}] {title}")
+            if url:
+                result_parts.append(f"    URL: {url}")
+            
+            # Highlights (приоритет над обычным snippet)
+            highlights = r.get("highlights") or []
+            if highlights:
+                # Используем highlights как наиболее релевантные фрагменты
+                for h_idx, h in enumerate(highlights[:2], 1):
+                    h_text = h.replace("\n", " ").strip()
+                    if h_text:
+                        result_parts.append(f"    Ключевой фрагмент {h_idx}: {h_text}")
+            else:
+                # Fallback на обычный snippet если highlights нет
+                snippet = (r.get("snippet") or "").replace("\n", " ").strip()
+                if snippet:
+                    truncated = snippet[: max(100, LG_SEARCH_SNIPPET_CHARS)]
+                    result_parts.append(f"    {truncated}")
+            
+            # Summary (если есть)
+            summary = (r.get("summary") or "").strip()
+            if summary:
+                summary_text = summary.replace("\n", " ")[:400]
+                result_parts.append(f"    Краткое содержание: {summary_text}")
+            
+            # Subpages (если есть важная дополнительная информация)
+            subpages = r.get("subpages") or []
+            if subpages:
+                for sub_idx, sub in enumerate(subpages[:2], 1):
+                    sub_title = (sub.get("title") or "").strip()
+                    sub_text = (sub.get("text") or "").replace("\n", " ").strip()
+                    if sub_text:
+                        sub_truncated = sub_text[:200]
+                        if sub_title:
+                            result_parts.append(f"    Подстраница [{sub_idx}] {sub_title}: {sub_truncated}")
+                        else:
+                            result_parts.append(f"    Подстраница [{sub_idx}]: {sub_truncated}")
+            
+            # Собираем все части результата
+            if result_parts:
+                search_lines.append("\n".join(result_parts))
+        
+        if search_lines:
+            parts.append("РЕЗУЛЬТАТЫ ПОИСКА:\n\n" + "\n\n".join(search_lines))
     parts.append("ВОПРОС ПОЛЬЗОВАТЕЛЯ:\n" + (state.get("user_message") or ""))
     state["draft_answer"] = "\n\n".join(parts)
     return state
 
 
+@_track_timing("call_gemini")
 def call_gemini(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("call_gemini")
@@ -512,6 +592,7 @@ def call_gemini(state: AgentState) -> AgentState:
     return state
 
 
+@_track_timing("postprocess_answer")
 def postprocess_answer(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("postprocess_answer")
@@ -538,12 +619,24 @@ def postprocess_answer(state: AgentState) -> AgentState:
 # Убран повторный цикл оценки полноты — поиск выполняется заранее для каждого запроса
 
 
+@_track_timing("finalize")
 def finalize(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("finalize")
     state["graph_trace"] = trace
     results = state.get("search_results") or []
     state["search_results"] = results[:3]
+    
+    # Log timing summary
+    timings = state.get("timings", {})
+    if timings:
+        total_time = sum(timings.values())
+        logger.info("=== Graph Execution Timing ===")
+        logger.info("Total time: %.3f seconds", total_time)
+        for node, elapsed in sorted(timings.items(), key=lambda x: x[1], reverse=True):
+            percentage = (elapsed / total_time * 100) if total_time > 0 else 0
+            logger.info("  %s: %.3f s (%.1f%%)", node, elapsed, percentage)
+    
     return state
 
 
@@ -569,6 +662,7 @@ GRAPH_NODES.extend([
     "ensure_answer",
     "finalize",
 ])
+@_track_timing("ensure_answer")
 def ensure_answer(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("ensure_answer")
@@ -609,6 +703,7 @@ builder.add_conditional_edges("build_search_query", _after_build_router, {
 builder.add_edge("exa_search", "compose_prompt")
 builder.add_edge("compose_prompt", "call_gemini")
 builder.add_edge("call_gemini", "postprocess_answer")
+@_track_timing("assess")
 def assess(state: AgentState) -> AgentState:
     trace = state.get("graph_trace") or []
     trace.append("assess")
@@ -670,18 +765,28 @@ _fmt = (os.environ.get("LANGGRAPH_VIZ_FORMAT") or "").lower().strip()
 
 def _infer_ext_from_path(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".png", ".svg"):
+    if ext in (".png", ".svg", ".mmd"):
         return ext.lstrip(".")
     return "svg"
 
 _default_ext = "svg"
 if _custom_path:
     _default_ext = _infer_ext_from_path(_custom_path)
-elif _fmt in ("png", "svg"):
+elif _fmt in ("png", "svg", "mmd"):
     _default_ext = _fmt
 
 _default_filename = f"_graph.{_default_ext}"
-GRAPH_VIZ_PATH = _custom_path or os.path.join(os.path.dirname(__file__), _default_filename)
+
+# Resolve custom path relative to project root if not absolute
+if _custom_path:
+    if not os.path.isabs(_custom_path):
+        # Get project root (3 levels up from this file: app/graph.py -> app/ -> backend_lg/ -> root/)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        GRAPH_VIZ_PATH = os.path.join(project_root, _custom_path)
+    else:
+        GRAPH_VIZ_PATH = _custom_path
+else:
+    GRAPH_VIZ_PATH = os.path.join(os.path.dirname(__file__), _default_filename)
 
 def _save_graph_image(path: str, ext: str) -> bool:
     """Attempt multiple visualization methods depending on langgraph version.
@@ -754,35 +859,52 @@ try:
                 os.makedirs(dirpath, exist_ok=True)
         except Exception as mkdir_e:
             logger.warning("LangGraph viz: failed to ensure directory %s: %s", os.path.dirname(GRAPH_VIZ_PATH), mkdir_e)
-        ok = _save_graph_image(GRAPH_VIZ_PATH, _default_ext)
-        if ok:
-            logger.info("LangGraph visualization saved: %s", GRAPH_VIZ_PATH)
-            # best-effort open if supported by this version
-            if _viz_mode == "open":
-                try:
-                    if hasattr(builder, "visualize"):
-                        builder.visualize()
-                    elif hasattr(app_graph, "visualize"):
-                        app_graph.visualize()
-                except Exception as e:
-                    logger.debug("open-visualize failed: %s", e)
-        else:
-            # Mermaid fallback file alongside requested path
-            base, _ = os.path.splitext(GRAPH_VIZ_PATH)
-            mermaid_path = base + ".mmd"
+        
+        # If format is .mmd, always use _build_mermaid() directly
+        if _default_ext == "mmd":
             try:
-                with open(mermaid_path, "w", encoding="utf-8") as f:
+                with open(GRAPH_VIZ_PATH, "w", encoding="utf-8") as f:
                     f.write(_build_mermaid())
-                logger.info("LangGraph mermaid saved: %s", mermaid_path)
+                logger.info("LangGraph mermaid saved: %s", GRAPH_VIZ_PATH)
             except Exception as e:
-                logger.warning("LangGraph mermaid save failed: %s (path=%s)", e, mermaid_path)
+                logger.warning("LangGraph mermaid save failed: %s (path=%s)", e, GRAPH_VIZ_PATH)
+        else:
+            # Try to save as PNG/SVG using library methods
+            ok = _save_graph_image(GRAPH_VIZ_PATH, _default_ext)
+            if ok:
+                logger.info("LangGraph visualization saved: %s", GRAPH_VIZ_PATH)
+                # best-effort open if supported by this version
+                if _viz_mode == "open":
+                    try:
+                        if hasattr(builder, "visualize"):
+                            builder.visualize()
+                        elif hasattr(app_graph, "visualize"):
+                            app_graph.visualize()
+                    except Exception as e:
+                        logger.debug("open-visualize failed: %s", e)
+            else:
+                # Mermaid fallback file alongside requested path
+                base, _ = os.path.splitext(GRAPH_VIZ_PATH)
+                mermaid_path = base + ".mmd"
+                try:
+                    with open(mermaid_path, "w", encoding="utf-8") as f:
+                        f.write(_build_mermaid())
+                    logger.info("LangGraph mermaid fallback saved: %s", mermaid_path)
+                except Exception as e:
+                    logger.warning("LangGraph mermaid fallback failed: %s (path=%s)", e, mermaid_path)
 except Exception as e:
     # Do not fail app import on visualization errors
     logger.warning("LangGraph visualization failed: %s (path=%s)", e, GRAPH_VIZ_PATH)
 
 # Fast helper to build prompt without running the whole graph
-def build_prompt_fast(state_in: AgentState) -> AgentState:
+def build_prompt_fast(state_in: AgentState, config: Optional[Dict[str, Any]] = None) -> AgentState:
+    import time
+    total_start = time.time()
+    
     state: AgentState = dict(state_in)
+    if "timings" not in state:
+        state["timings"] = {}
+    
     state = prepare_context(state)
     nxt = need_chunk(state)
     if nxt == "chunk":
@@ -791,4 +913,15 @@ def build_prompt_fast(state_in: AgentState) -> AgentState:
     if state.get("need_search"):
         state = exa_search_node(state)
     state = compose_prompt(state)
+    
+    # Log timing summary for streaming mode
+    total_elapsed = time.time() - total_start
+    timings = state.get("timings", {})
+    if timings:
+        logger.info("=== Graph Execution Timing (Streaming Mode) ===")
+        logger.info("Total time: %.3f seconds", total_elapsed)
+        for node, elapsed in sorted(timings.items(), key=lambda x: x[1], reverse=True):
+            percentage = (elapsed / total_elapsed * 100) if total_elapsed > 0 else 0
+            logger.info("  %s: %.3f s (%.1f%%)", node, elapsed, percentage)
+    
     return state
