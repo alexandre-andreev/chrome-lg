@@ -14,11 +14,15 @@
     "scripting",
     "storage",
     "tabs",
+    "clipboardWrite",
+    "tts",
     "sidePanel"
   ],
   "host_permissions": [
     "http://127.0.0.1:8010/*",
     "https://127.0.0.1:8010/*",
+    "http://127.0.0.1:8090/*",
+    "https://127.0.0.1:8090/*",
     "<all_urls>"
   ],
   "options_page": "options.html",
@@ -29,7 +33,8 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

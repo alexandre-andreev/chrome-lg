@@ -226,8 +226,12 @@ function sendMessageSafe(message, attempt) {
     try {
         chrome.runtime.sendMessage(message, () => {
             const err = chrome.runtime && chrome.runtime.lastError ? chrome.runtime.lastError : null;
-            if (err && /context invalidated|Receiving end does not exist/i.test(String(err.message || ''))) {
-                if (tries < 3) setTimeout(() => sendMessageSafe(message, tries + 1), 500 * (tries + 1));
+            if (err) {
+                // Only retry on transient context errors
+                if (/context invalidated|Receiving end does not exist/i.test(String(err.message || ''))) {
+                    if (tries < 3) setTimeout(() => sendMessageSafe(message, tries + 1), 500 * (tries + 1));
+                }
+                return;
             }
         });
     } catch (_) {
@@ -301,7 +305,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 		// Also push to background cache
         sendMessageSafe({ type: 'PAGE_CONTEXT', ...ctx });
 		try { sendResponse(ctx); } catch (_) {}
-		return true;
+		// Return false to indicate synchronous response is complete
+		return false;
 	}
 });
 

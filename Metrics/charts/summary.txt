@@ -2,14 +2,14 @@
 LANGFUSE METRICS SUMMARY
 ============================================================
 
-Report Generated: 2025-10-01T23:03:36.214815
-Total Traces: 99
+Report Generated: 2025-10-02T10:38:17.929424
+Total Traces: 100
 
 OPERATION FREQUENCY:
 ----------------------------------------
-  gemini_generate        65 (65.7%)
-  rag_retrieve           16 (16.2%)
-  exa_search             13 (13.1%)
-  rag_upsert              5 (5.1%)
+  gemini_generate        60 (60.0%)
+  rag_retrieve           18 (18.0%)
+  rag_upsert             12 (12.0%)
+  exa_search             10 (10.0%)
 
 ============================================================

@@ -1,9 +1,9 @@
 'use strict';
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get({ backendBaseUrl: 'http://localhost:8000' }, (res) => {
+  chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8090' }, (res) => {
     if (!res.backendBaseUrl) {
-      chrome.storage.local.set({ backendBaseUrl: 'http://localhost:8000' });
+      chrome.storage.local.set({ backendBaseUrl: 'http://127.0.0.1:8090' });
     }
   });
 });

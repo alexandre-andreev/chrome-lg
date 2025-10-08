@@ -6,13 +6,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusEl = document.getElementById('status');
 
   // Load current value
-  chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8010' }, (res) => {
+  chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8090' }, (res) => {
     if (input) input.value = (res.backendBaseUrl || '').replace(/\/$/, '');
   });
 
   saveBtn?.addEventListener('click', () => {
     const raw = (input?.value || '').trim();
-    const val = (raw || input?.placeholder || 'http://127.0.0.1:8010').replace(/\/$/, '');
+    const val = (raw || input?.placeholder || 'http://127.0.0.1:8090').replace(/\/$/, '');
     chrome.storage.local.set({ backendBaseUrl: val }, () => {
       if (statusEl) {
         statusEl.textContent = 'Сохранено';

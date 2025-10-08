@@ -17,7 +17,7 @@ except Exception:
     pass
 
 from .graph import app_graph as _compiled_graph, GRAPH_VIZ_PATH
-from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream, call_gemini_text, embed_text
+from .services import sanitize_answer, EXA_API_KEY, GEMINI_API_KEY, exa_cache_invalidate_host, call_gemini_stream, call_gemini_text, embed_text, sber_tts_synthesize, sber_token_warmup, sber_is_enabled
 from .config import load_overrides_from_json, save_overrides_to_json
 from .langfuse_tracer import get_langfuse_handler, is_enabled as langfuse_is_enabled, flush as langfuse_flush
 import threading
@@ -55,6 +55,18 @@ class ExportResponse(BaseModel):
     content: str
 
 
+class TTSPrepareRequest(BaseModel):
+    page_url: Optional[str] = None
+    page_title: Optional[str] = None
+    page_text: Optional[str] = None
+
+
+class TTSPrepareResponse(BaseModel):
+    text: str
+    in_len: int
+    out_len: int
+
+
 app = FastAPI(title="Chrome-bot Backend (LangGraph)", version="2.1.0")
 _LAST_HOST: str | None = None
 app.add_middleware(
@@ -68,6 +80,17 @@ app.add_middleware(
 # Initialize compiled graph pointer and mutex
 app.state.app_graph = _compiled_graph
 _cfg_lock = threading.Lock()
+@app.on_event("startup")
+async def _startup_warmups():
+    try:
+        if sber_is_enabled():
+            ok = sber_token_warmup()
+            if ok:
+                logger.info("SBER OAuth warmup: OK")
+            else:
+                logger.warning("SBER OAuth warmup: FAILED")
+    except Exception as e:
+        logger.exception("startup warmup failed: %s", e)
 
 
 @app.get("/")
@@ -520,4 +543,122 @@ async def export_md(payload: Dict[str, Any]) -> ExportResponse:
     except Exception:
         md_content = md_content + body
     return ExportResponse(filename=filename, content=md_content)
+
+
+def _clean_text_for_tts(text: str) -> str:
+    # Lightweight normalization for TTS: remove URLs, brackets, compress whitespace
+    try:
+        t = text or ""
+        # Remove URLs
+        t = __import__("re").sub(r"https?://\S+", "", t)
+        # Remove bracketed references [..]
+        t = __import__("re").sub(r"\[[^\]]+\]", "", t)
+        # Replace pipes with commas
+        t = t.replace("|", ", ")
+        # Collapse whitespace
+        t = __import__("re").sub(r"\s+", " ", t).strip()
+        # Collapse repeated punctuation
+        t = __import__("re").sub(r"([.!?]){2,}", r"\\1 ", t)
+        # Safety limit
+        return t[:10000]
+    except Exception:
+        return (text or "")[:5000]
+
+
+@app.post("/tts_prepare", response_model=TTSPrepareResponse)
+async def tts_prepare(payload: TTSPrepareRequest) -> TTSPrepareResponse:
+    raw = (payload.page_text or "").strip()
+    in_len = len(raw)
+    if not raw:
+        # Accept empty but return empty as well
+        logger.info("tts_prepare: empty input (url=%r title=%r)", payload.page_url, payload.page_title)
+        return TTSPrepareResponse(text="", in_len=0, out_len=0)
+    cleaned = _clean_text_for_tts(raw)
+    out_len = len(cleaned)
+    logger.info("tts_prepare: url=%r in_len=%d out_len=%d", payload.page_url, in_len, out_len)
+    # Optionally show head/tail samples at DEBUG level
+    try:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("tts_prepare sample in: %s", raw[:200])
+            logger.debug("tts_prepare sample out: %s", cleaned[:200])
+    except Exception:
+        pass
+    return TTSPrepareResponse(text=cleaned, in_len=in_len, out_len=out_len)
+
+
+class TTSSummarizeRequest(BaseModel):
+    page_url: Optional[str] = None
+    page_title: Optional[str] = None
+    page_text: Optional[str] = None
+    max_chars: Optional[int] = 8000
+
+
+class TTSSummarizeResponse(BaseModel):
+    text: str
+    in_len: int
+    out_len: int
+    used_gemini: bool
+
+
+@app.post("/tts_summarize", response_model=TTSSummarizeResponse)
+async def tts_summarize(payload: TTSSummarizeRequest) -> TTSSummarizeResponse:
+    raw = (payload.page_text or "").strip()
+    in_len = len(raw)
+    if not raw:
+        logger.info("tts_summarize: empty input (url=%r title=%r)", payload.page_url, payload.page_title)
+        return TTSSummarizeResponse(text="", in_len=0, out_len=0, used_gemini=False)
+    # If Gemini key present, generate speech-friendly concise summary (distinct from export)
+    used_gemini = False
+    out = ""
+    try:
+        if GEMINI_API_KEY:
+            used_gemini = True
+            # Smaller cap for TTS summary than export, tuned for speech
+            text_for_tts = raw[:12000]
+            prompt = (
+                "Подготовь краткий связный текст для озвучивания (радио-ведущий). "
+                "Сжато, без меню, без ссылок и без мусора, только смысл. "
+                "Сохраняй исходный язык. Не используй списки, пиши гладкими фразами.\n\n"
+                f"TITLE: {payload.page_title}\nURL: {payload.page_url}\nTEXT:\n{text_for_tts}"
+            )
+            # Shorter timeout than export; speech needs to start quickly
+            tts_timeout = float(os.getenv("GEMINI_TTS_TIMEOUT_S", "20"))
+            out = call_gemini_text(prompt, timeout_s=tts_timeout) or ""
+    except Exception as e:
+        logger.warning("tts_summarize: gemini failed: %s", e)
+        used_gemini = False
+        out = ""
+    if not out:
+        # Fallback to simple cleaner
+        out = _clean_text_for_tts(raw)
+        used_gemini = False
+    # Limit final length for TTS
+    max_chars = int(payload.max_chars or 8000)
+    out = out[:max_chars]
+    out_len = len(out)
+    logger.info("tts_summarize: url=%r in_len=%d out_len=%d used_gemini=%s", payload.page_url, in_len, out_len, used_gemini)
+    try:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("tts_sum sample out: %s", out[:200])
+    except Exception:
+        pass
+    return TTSSummarizeResponse(text=out, in_len=in_len, out_len=out_len, used_gemini=used_gemini)
+
+@app.post("/tts_sber_synthesize")
+async def http_tts_sber(payload: Dict[str, Any]):
+    text = (payload.get("text") or "").strip()
+    voice = (payload.get("voice") or None)
+    audio_encoding = (payload.get("audio_encoding") or None)
+    language = (payload.get("language") or None)
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    try:
+        audio, mime = sber_tts_synthesize(text, voice=voice, audio_encoding=audio_encoding, language=language)
+        if not audio:
+            raise HTTPException(status_code=500, detail="Empty audio")
+        # Return as bytes
+        return StreamingResponse(iter([audio]), media_type=mime)
+    except Exception as e:
+        logger.exception("/tts_sber_synthesize failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 

@@ -8,6 +8,12 @@ let currentTabId = null;
 let lastUrlInActiveTab = null;
 let panelVisible = true;
 const defaultPlaceholder = (document.getElementById('chatInput')?.getAttribute('placeholder')) || 'Спросите ИИ… (Shift+Enter — новая строка)';
+let ttsActive = false;
+let ttsUtterance = null;
+let ttsEngine = null; // 'chrome' | 'speech' | null
+let ttsQueue = [];
+let ttsIndex = 0;
+let sberAudio = null; // HTMLAudioElement for Sber playback
 
 function sanitizeForDisplay(text) {
   if (!text) return text;
@@ -24,15 +30,22 @@ function sanitizeForDisplay(text) {
   return t;
 }
 
-function setBusy(busy) {
+function setBusy(busy, label) {
+  const ttsBtn = document.getElementById('ttsBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const copyMdBtn = document.getElementById('copyMdBtn');
   if (busy) {
     sendBtn.disabled = true;
     chatInput.disabled = true;
-    chatInput.setAttribute('placeholder', 'ИИ думает…');
+    chatInput.setAttribute('placeholder', label || 'Занято…');
+    if (exportBtn) exportBtn.disabled = true;
+    if (copyMdBtn) copyMdBtn.disabled = true;
   } else {
     sendBtn.disabled = false;
     chatInput.disabled = false;
     chatInput.setAttribute('placeholder', defaultPlaceholder);
+    if (exportBtn) exportBtn.disabled = false;
+    if (copyMdBtn) copyMdBtn.disabled = false;
   }
 }
 
@@ -54,14 +67,55 @@ function pushMsg(role, text, opts) {
 
 async function getBackendBaseUrl() {
   return new Promise(resolve => {
-    chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8010' }, (res) => {
-      resolve(res.backendBaseUrl.replace(/\/$/, ''));
+    chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8090' }, (res) => {
+      resolve((res.backendBaseUrl || 'http://127.0.0.1:8090').replace(/\/$/, ''));
     });
   });
 }
 
-function renderSettingsForm(container, cfg) {
+function renderSettingsForm(container, cfg, opts) {
   container.innerHTML = '';
+  // Local connection settings (always shown)
+  const sectionConn = document.createElement('div');
+  sectionConn.style.marginBottom = '12px';
+  const hConn = document.createElement('div');
+  hConn.textContent = 'Подключение';
+  hConn.style.fontWeight = '600';
+  hConn.style.marginBottom = '6px';
+  const rowConn = document.createElement('label');
+  rowConn.style.display = 'flex';
+  rowConn.style.alignItems = 'center';
+  rowConn.style.justifyContent = 'space-between';
+  rowConn.style.gap = '8px';
+  const spanConn = document.createElement('span');
+  spanConn.textContent = 'backendBaseUrl';
+  spanConn.style.fontSize = '12px';
+  spanConn.style.color = '#4a5b76';
+  const inputConn = document.createElement('input');
+  inputConn.type = 'text';
+  inputConn.id = 'local_backendBaseUrl';
+  inputConn.style.width = '220px';
+  inputConn.placeholder = 'http://127.0.0.1:8090';
+  rowConn.appendChild(spanConn);
+  rowConn.appendChild(inputConn);
+  sectionConn.appendChild(hConn);
+  sectionConn.appendChild(rowConn);
+  container.appendChild(sectionConn);
+  // Load current baseUrl
+  try {
+    chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8090' }, (res) => {
+      inputConn.value = (res.backendBaseUrl || 'http://127.0.0.1:8090').replace(/\/$/, '');
+    });
+  } catch (_) {}
+  if (!cfg || typeof cfg !== 'object') {
+    const warn = document.createElement('div');
+    warn.textContent = 'Не удалось загрузить параметры сервера (/config). Проверьте backendBaseUrl и повторите.';
+    warn.style.fontSize = '12px';
+    warn.style.color = '#a33';
+    warn.style.marginTop = '8px';
+    container.appendChild(warn);
+    return;
+  }
   const fields = [
     ['STREAMING_ENABLED', 'checkbox', 'Стриминг (/chat_stream).\nВкл: интерактивно, быстрее видны токены; может падать при сетевых сбоях.\nВыкл: стабильнее, ответ одним JSON.'],
     ['GEMINI_MODEL', 'text', 'Модель Gemini.\nБолее “тяжёлая” (например, 2.5‑flash) — качественнее, медленнее.\n“Лёгкая” (2.0‑flash‑lite) — быстрее, короче.'],
@@ -152,10 +206,38 @@ async function sendChat(message) {
   pageUrl = pageData?.url || tab.url;
   pageTitle = pageData?.title || tab.title;
   pageText = pageData?.text || '';
+  // Fallbacks if text is empty/too short
+  if (!pageText || pageText.length < 50) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: currentTabId },
+        func: () => ({
+          text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 30000),
+          title: document.title,
+          url: location.href,
+        })
+      });
+      if (result) {
+        pageText = result.text || pageText;
+        pageTitle = result.title || pageTitle;
+        pageUrl = result.url || pageUrl;
+      }
+    } catch (_) {}
+    if (!pageText || pageText.length < 50) {
+      try {
+        const cached = await new Promise(resolve => chrome.storage.local.get({ lastPageContext: null }, r => resolve(r.lastPageContext)));
+        if (cached && cached.text) {
+          pageText = cached.text;
+          pageTitle = cached.title || pageTitle;
+          pageUrl = cached.url || pageUrl;
+        }
+      } catch (_) {}
+    }
+  }
 
   lastUrlInActiveTab = pageUrl;
 
-  setBusy(true);
+  setBusy(true, 'ИИ думает…');
   try {
     // Try streaming endpoint first
     try {
@@ -272,7 +354,7 @@ async function sendChat(message) {
   }
 }
 
-// Export current page to Markdown
+// Export current page to Markdown (file)
 async function exportCurrentPageToMarkdown() {
   const baseUrl = await getBackendBaseUrl();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -281,6 +363,7 @@ async function exportCurrentPageToMarkdown() {
     pushMsg('assistant', 'Не удалось определить активную вкладку.');
     return;
   }
+  setBusy(true, 'Идёт экспорт…');
   let pageData = null;
   try {
     pageData = await new Promise((resolve) => {
@@ -292,7 +375,27 @@ async function exportCurrentPageToMarkdown() {
   } catch (_) {}
   const pageUrl = pageData?.url || tab.url;
   const pageTitle = pageData?.title || tab.title;
-  const pageText = pageData?.text || '';
+  let pageText = pageData?.text || '';
+  // Fallback when content script is blocked or returns too short text
+  if (!pageText || pageText.length < 50) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: currentTabIdLocal },
+        func: () => ({
+          text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 30000),
+          title: document.title,
+          url: location.href,
+        })
+      });
+      if (result && result.text) pageText = result.text;
+    } catch (_) {}
+    if (!pageText || pageText.length < 50) {
+      try {
+        const cached = await new Promise(resolve => chrome.storage.local.get({ lastPageContext: null }, r => resolve(r.lastPageContext)));
+        if (cached && cached.text) pageText = cached.text;
+      } catch (_) {}
+    }
+  }
   try {
     const resp = await fetch(baseUrl + '/export_md', {
       method: 'POST',
@@ -318,6 +421,393 @@ async function exportCurrentPageToMarkdown() {
   } catch (e) {
     pushMsg('assistant', 'Ошибка экспорта: ' + (e?.message || String(e)));
   }
+  setBusy(false);
+}
+
+// Copy current page to clipboard (Markdown)
+async function copyCurrentPageMarkdownToClipboard() {
+  const baseUrl = await getBackendBaseUrl();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const currentTabIdLocal = tab?.id;
+  if (!currentTabIdLocal) {
+    pushMsg('assistant', 'Не удалось определить активную вкладку.');
+    return;
+  }
+  setBusy(true, 'Идёт копирование в буфер обмена…');
+  let pageData = null;
+  try {
+    pageData = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(currentTabIdLocal, { type: 'REQUEST_CONTEXT' }, (resp) => {
+        if (chrome.runtime.lastError) return resolve(null);
+        resolve(resp || null);
+      });
+    });
+  } catch (_) {}
+  const pageUrl = pageData?.url || tab.url;
+  const pageTitle = pageData?.title || tab.title;
+  let pageText = pageData?.text || '';
+  if (!pageText || pageText.length < 50) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: currentTabIdLocal },
+        func: () => ({
+          text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 30000),
+          title: document.title,
+          url: location.href,
+        })
+      });
+      if (result && result.text) pageText = result.text;
+    } catch (_) {}
+    if (!pageText || pageText.length < 50) {
+      try {
+        const cached = await new Promise(resolve => chrome.storage.local.get({ lastPageContext: null }, r => resolve(r.lastPageContext)));
+        if (cached && cached.text) pageText = cached.text;
+      } catch (_) {}
+    }
+  }
+
+  try {
+    const resp = await fetch(baseUrl + '/export_md', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_url: pageUrl, page_title: pageTitle, page_text: pageText })
+    });
+    if (!resp.ok) throw new Error('Ошибка сервера: ' + resp.status);
+    const data = await resp.json();
+    if (data?.content) {
+      await navigator.clipboard.writeText(data.content);
+      pushMsg('assistant', 'Скопировано в буфер обмена (Markdown)');
+    } else {
+      pushMsg('assistant', 'Не удалось получить Markdown.');
+    }
+  } catch (e) {
+    pushMsg('assistant', 'Ошибка копирования: ' + (e?.message || String(e)));
+  }
+  setBusy(false);
+}
+
+function cleanForSpeech(text) {
+  let t = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\[[^\]]+\]/g, '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\|/g, ', ')
+    .trim();
+  t = t.replace(/([.!?]){2,}/g, '$1 ');
+  return t;
+}
+
+async function getCleanPageTextForSpeech() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) throw new Error('Нет активной вкладки');
+  let pageData = null;
+  try {
+    pageData = await new Promise(resolve => chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_CONTEXT' }, resp => resolve(resp || null)));
+  } catch (_) {}
+  let text = pageData?.text || '';
+  if (!text || text.length < 200) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+        const sel = document.querySelector('main,[role="main"],article,.article__content,.tm-article-body,.post__text,.post-content,.entry-content,.content');
+        const raw = (sel?.innerText || document.body?.innerText || '');
+        return raw.slice(0, 30000);
+      }});
+      if (result) text = result;
+    } catch (_) {}
+  }
+  // Send to server for logging/cleaning parity
+  try {
+    const baseUrl = await getBackendBaseUrl();
+    // Try summarize endpoint first (speech-friendly text via Gemini)
+    let resp = await fetch(baseUrl + '/tts_summarize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_url: tab.url, page_title: tab.title, page_text: text })
+    });
+    if (!resp.ok) {
+      // Fallback to simple prepare endpoint
+      resp = await fetch(baseUrl + '/tts_prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_url: tab.url, page_title: tab.title, page_text: text })
+      });
+    }
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && typeof data.text === 'string') {
+        return String(data.text || '').slice(0, 8000);
+      }
+    }
+  } catch (_) {}
+  return cleanForSpeech(text).slice(0, 8000);
+}
+
+async function toggleSpeakCurrentPage() {
+  const btn = document.getElementById('ttsBtn');
+  if (ttsActive) {
+    try {
+      if (ttsEngine === 'chrome' && chrome?.tts?.stop) {
+        chrome.tts.stop();
+      } else {
+        window.speechSynthesis.cancel();
+      }
+    } catch (_) {}
+    ttsActive = false;
+    ttsQueue = [];
+    ttsIndex = 0;
+    if (btn) {
+      btn.textContent = '🔊';
+      const def = btn.dataset.defaultTitle || 'Озвучка (прочитать страницу)';
+      btn.setAttribute('title', def);
+      btn.setAttribute('aria-label', 'Озвучка');
+    }
+    pushMsg('assistant', 'Озвучивание остановлено', { className: 'local' });
+    setBusy(false);
+    return;
+  }
+  try {
+    setBusy(true, 'Идёт озвучивание текста…');
+    const text = await getCleanPageTextForSpeech();
+    if (!text || text.length < 50) {
+      pushMsg('assistant', 'Нет текста для озвучки.', { className: 'local' });
+      setBusy(false);
+      return;
+    }
+    // Prefer Chrome TTS API if available (often более стабильна)
+    if (chrome?.tts?.speak) {
+      ttsEngine = 'chrome';
+      // Build chunk queue (≈1200-1500 chars, по предложениям)
+      ttsQueue = buildChunks(text, 1400);
+      ttsIndex = 0;
+      console.log('[TTS] chrome.tts queue size:', ttsQueue.length);
+      if (!ttsQueue.length) {
+        setBusy(false);
+        pushMsg('assistant', 'Нет текста для озвучки.', { className: 'local' });
+        return;
+      }
+      ttsActive = true;
+      if (btn) {
+        if (!btn.dataset.defaultTitle) btn.dataset.defaultTitle = btn.getAttribute('title') || 'Озвучка (прочитать страницу)';
+        btn.textContent = '🔊';
+        btn.setAttribute('title', 'Остановить озвучивание');
+        btn.setAttribute('aria-label', 'Остановить озвучивание');
+      }
+      try { chrome.tts.stop?.(); } catch (_) {}
+      speakNextChromeChunk();
+      pushMsg('assistant', 'Озвучиваю страницу… (Chrome TTS)', { className: 'local' });
+      return;
+    }
+
+    // Fallback: Web Speech API
+    ttsEngine = 'speech';
+    ttsQueue = buildChunks(text, 1200);
+    ttsIndex = 0;
+    console.log('[TTS] speech queue size:', ttsQueue.length);
+    if (!ttsQueue.length) {
+      setBusy(false);
+      pushMsg('assistant', 'Нет текста для озвучки.', { className: 'local' });
+      return;
+    }
+    ttsActive = true;
+    if (btn) {
+      if (!btn.dataset.defaultTitle) btn.dataset.defaultTitle = btn.getAttribute('title') || 'Озвучка (прочитать страницу)';
+      btn.textContent = '🔊';
+      btn.setAttribute('title', 'Остановить озвучивание');
+      btn.setAttribute('aria-label', 'Остановить озвучивание');
+    }
+    speakNextSpeechChunk();
+    pushMsg('assistant', 'Озвучиваю страницу… (Web Speech)', { className: 'local' });
+  } catch (e) {
+    pushMsg('assistant', 'Ошибка озвучки: ' + (e?.message || String(e)));
+    setBusy(false);
+  }
+}
+
+function buildChunks(text, maxLen) {
+  const chunks = [];
+  const sents = (String(text || '')).split(/(?<=[.!?])\s+/);
+  let buf = '';
+  for (const s of sents) {
+    const seg = s.trim();
+    if (!seg) continue;
+    if (seg.length > maxLen) {
+      // hard split long sentence
+      for (let i = 0; i < seg.length; i += maxLen) {
+        const piece = seg.slice(i, i + maxLen);
+        if (buf) { chunks.push(buf); buf = ''; }
+        chunks.push(piece);
+      }
+      continue;
+    }
+    if ((buf + ' ' + seg).trim().length > maxLen) {
+      if (buf) chunks.push(buf);
+      buf = seg;
+    } else {
+      buf = buf ? (buf + ' ' + seg) : seg;
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
+async function playSberTTS() {
+  // Summarize text first (same as local TTS)
+  setBusy(true, 'Идёт подготовка озвучки (Sber)…');
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('Нет активной вкладки');
+    // Reuse summarization pipeline
+    let pageData = null;
+    try { pageData = await new Promise(resolve => chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_CONTEXT' }, resp => resolve(resp || null))); } catch (_) {}
+    let text = pageData?.text || '';
+    if (!text || text.length < 200) {
+      try {
+        const [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+          const sel = document.querySelector('main,[role="main"],article,.article__content,.tm-article-body,.post__text,.post-content,.entry-content,.content');
+          const raw = (sel?.innerText || document.body?.innerText || '');
+          return raw.slice(0, 30000);
+        }});
+        if (result) text = result;
+      } catch (_) {}
+    }
+    const baseUrl = await getBackendBaseUrl();
+    // 1) server summarize (gemini)
+    let resp = await fetch(baseUrl + '/tts_summarize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_url: tab.url, page_title: tab.title, page_text: text }) });
+    let speakText = '';
+    if (resp.ok) { const data = await resp.json(); speakText = String((data && data.text) || '').slice(0, 8000); }
+    if (!speakText) {
+      // Fallback to prepare
+      resp = await fetch(baseUrl + '/tts_prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_url: tab.url, page_title: tab.title, page_text: text }) });
+      if (resp.ok) { const data = await resp.json(); speakText = String((data && data.text) || '').slice(0, 8000); }
+    }
+    if (!speakText) throw new Error('Не удалось подготовить текст для озвучки');
+    // 2) request audio from Sber
+    const audioResp = await fetch(baseUrl + '/tts_sber_synthesize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: speakText }) });
+    if (!audioResp.ok) throw new Error('Синтез речи (Sber) завершился ошибкой: ' + audioResp.status);
+    const blob = await audioResp.blob();
+    const url = URL.createObjectURL(blob);
+    // stop previous
+    try { if (sberAudio) { sberAudio.pause(); URL.revokeObjectURL(sberAudio.src); } } catch (_) {}
+    sberAudio = new Audio(url);
+    sberAudio.onended = () => {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+      sberAudio = null;
+      const b = document.getElementById('sberTtsBtn');
+      if (b) { b.setAttribute('title', 'Озвучка (Sber)'); b.setAttribute('aria-label', 'Озвучка (Sber)'); }
+    };
+    sberAudio.onerror = () => {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+      sberAudio = null;
+      const b = document.getElementById('sberTtsBtn');
+      if (b) { b.setAttribute('title', 'Озвучка (Sber)'); b.setAttribute('aria-label', 'Озвучка (Sber)'); }
+    };
+    await sberAudio.play();
+    const b = document.getElementById('sberTtsBtn');
+    if (b) { b.setAttribute('title', 'Остановить озвучивание (Sber)'); b.setAttribute('aria-label', 'Остановить озвучивание (Sber)'); }
+    pushMsg('assistant', 'Озвучиваю страницу… (Sber)', { className: 'local' });
+  } finally {
+    setBusy(false);
+  }
+}
+
+function speakNextChromeChunk() {
+  if (!ttsActive) return;
+  if (ttsIndex >= ttsQueue.length) {
+    // done
+    ttsActive = false;
+    setBusy(false);
+    const b = document.getElementById('ttsBtn');
+    if (b) {
+      b.textContent = '🔊';
+      const def = b.dataset.defaultTitle || 'Озвучка (прочитать страницу)';
+      b.setAttribute('title', def);
+      b.setAttribute('aria-label', 'Озвучка');
+    }
+    console.log('[TTS] chrome done');
+    return;
+  }
+  const text = ttsQueue[ttsIndex];
+  const isFirst = (ttsIndex === 0);
+  console.log('[TTS] chrome speak chunk', ttsIndex + 1, '/', ttsQueue.length, 'len=', text.length);
+  chrome.tts.speak(text, {
+    enqueue: !isFirst,
+    lang: (navigator.language || 'ru-RU'),
+    rate: 1.0,
+    pitch: 1.0,
+    volume: 1.0,
+    onEvent: (ev) => {
+      if (!ttsActive) return;
+      if (ev?.type === 'end') {
+        ttsIndex += 1;
+        speakNextChromeChunk();
+      }
+      if (ev?.type === 'interrupted' || ev?.type === 'cancelled' || ev?.type === 'error') {
+        console.warn('[TTS] chrome event', ev?.type, 'at chunk', ttsIndex);
+        ttsActive = false;
+        setBusy(false);
+        const b = document.getElementById('ttsBtn');
+        if (b) {
+          b.textContent = '🔊';
+          const def = b.dataset.defaultTitle || 'Озвучка (прочитать страницу)';
+          b.setAttribute('title', def);
+          b.setAttribute('aria-label', 'Озвучка');
+        }
+      }
+    }
+  });
+}
+
+function speakNextSpeechChunk() {
+  if (!ttsActive) return;
+  if (ttsIndex >= ttsQueue.length) {
+    ttsActive = false;
+    setBusy(false);
+    const b = document.getElementById('ttsBtn');
+    if (b) {
+      b.textContent = '🔊';
+      const def = b.dataset.defaultTitle || 'Озвучка (прочитать страницу)';
+      b.setAttribute('title', def);
+      b.setAttribute('aria-label', 'Озвучка');
+    }
+    console.log('[TTS] speech done');
+    return;
+  }
+  const text = ttsQueue[ttsIndex];
+  console.log('[TTS] speech speak chunk', ttsIndex + 1, '/', ttsQueue.length, 'len=', text.length);
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = (navigator.language || 'ru-RU');
+  try {
+    const pickVoice = () => {
+      const voices = window.speechSynthesis.getVoices() || [];
+      const ru = voices.find(v => (v.lang || '').toLowerCase().startsWith('ru'));
+      if (ru) u.voice = ru;
+    };
+    pickVoice();
+    if (!u.voice) {
+      window.speechSynthesis.onvoiceschanged = () => { pickVoice(); };
+    }
+  } catch (_) {}
+  u.rate = 1.0;
+  u.pitch = 1.0;
+  u.onend = () => {
+    if (!ttsActive) return;
+    ttsIndex += 1;
+    speakNextSpeechChunk();
+  };
+  u.onerror = () => {
+    console.warn('[TTS] speech error at chunk', ttsIndex);
+    ttsActive = false;
+    setBusy(false);
+    const b = document.getElementById('ttsBtn');
+    if (b) {
+      b.textContent = '🔊';
+      const def = b.dataset.defaultTitle || 'Озвучка (прочитать страницу)';
+      b.setAttribute('title', def);
+      b.setAttribute('aria-label', 'Озвучка');
+    }
+  };
+  try { window.speechSynthesis.cancel(); } catch (_) {}
+  window.speechSynthesis.speak(u);
 }
 
 function hasExplicitSearchIntent(text) {
@@ -392,21 +882,115 @@ chatInput?.addEventListener('keydown', (e) => {
   }
 });
 
-// Copy chat content
-copyBtn?.addEventListener('click', async () => {
+// Remove copy chat button handler if exists (feature removed)
+if (copyBtn) {
+  if (copyBtn.parentElement) copyBtn.parentElement.removeChild(copyBtn);
+}
+
+// Bind header icon buttons
+document.addEventListener('DOMContentLoaded', async () => {
   try {
-    const lines = Array.from(chatEl.querySelectorAll('.msg')).map(w => {
-      const who = w.querySelector('.meta')?.textContent || '';
-      const text = w.querySelector('div:nth-child(2)')?.textContent || '';
-      return (who ? who + ': ' : '') + text;
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    currentTabId = tab?.id;
+    lastUrlInActiveTab = tab?.url;
+  } catch (_) {}
+  const exportBtn = document.getElementById('exportBtn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', async () => {
+      const orig = exportBtn.textContent;
+      exportBtn.disabled = true;
+      try { await exportCurrentPageToMarkdown(); }
+      finally {
+        exportBtn.disabled = false;
+      }
     });
-    const blob = new Blob([lines.join('\n\n')], { type: 'text/plain' });
-    await navigator.clipboard.writeText(await blob.text());
-    copyBtn.textContent = 'Скопировано';
-    setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 1500);
-  } catch (e) {
-    copyBtn.textContent = 'Ошибка';
-    setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 1500);
+  }
+  const copyMdBtn = document.getElementById('copyMdBtn');
+  if (copyMdBtn) {
+    copyMdBtn.addEventListener('click', async () => {
+      copyMdBtn.disabled = true;
+      try { await copyCurrentPageMarkdownToClipboard(); }
+      finally {
+        copyMdBtn.disabled = false;
+      }
+    });
+  }
+  const ttsBtn = document.getElementById('ttsBtn');
+  if (ttsBtn) {
+    ttsBtn.addEventListener('click', async () => {
+      try { await toggleSpeakCurrentPage(); } catch (_) {}
+    });
+  }
+
+  const sberTtsBtn = document.getElementById('sberTtsBtn');
+  if (sberTtsBtn) {
+    sberTtsBtn.addEventListener('click', async () => {
+      try {
+        // Toggle: stop if currently playing
+        if (sberAudio && !sberAudio.paused) {
+          try { sberAudio.pause(); } catch (_) {}
+          try { URL.revokeObjectURL(sberAudio.src); } catch (_) {}
+          sberAudio = null;
+          // restore tooltip
+          sberTtsBtn.setAttribute('title', 'Озвучка (Sber)');
+          sberTtsBtn.setAttribute('aria-label', 'Озвучка (Sber)');
+          pushMsg('assistant', 'Озвучивание остановлено (Sber)', { className: 'local' });
+          return;
+        }
+        await playSberTTS();
+      } catch (e) {
+        pushMsg('assistant', 'Ошибка Sber TTS: ' + (e?.message || String(e)));
+      }
+    });
+  }
+
+  const settingsBtn = document.getElementById('settingsBtn');
+  const modal = document.getElementById('settingsModal');
+  const body = document.getElementById('settingsBody');
+  const btnCancel = document.getElementById('settingsCancel');
+  const btnSave = document.getElementById('settingsSave');
+  if (settingsBtn && modal && body && btnCancel && btnSave) {
+    settingsBtn.addEventListener('click', async () => {
+      try {
+        const baseUrl = await getBackendBaseUrl();
+        const resp = await fetch(baseUrl + '/config');
+        const cfg = await resp.json();
+        renderSettingsForm(body, cfg);
+        modal.style.display = 'block';
+      } catch (e) {
+        // Render at least local connection settings
+        try { renderSettingsForm(body, null); } catch (_) {}
+        modal.style.display = 'block';
+      }
+    });
+    btnCancel.addEventListener('click', () => { modal.style.display = 'none'; });
+    btnSave.addEventListener('click', async () => {
+      try {
+        // Save local baseUrl first
+        const localUrl = (document.getElementById('local_backendBaseUrl')?.value || '').trim().replace(/\/$/, '');
+        if (localUrl) {
+          await new Promise(resolve => chrome.storage.local.set({ backendBaseUrl: localUrl }, resolve));
+        }
+        const baseUrl = localUrl || (await getBackendBaseUrl());
+        const payload = {};
+        body.querySelectorAll('input[id^="cfg_"]').forEach(inp => {
+          const key = inp.id.replace('cfg_', '');
+          if (inp.type === 'checkbox') {
+            payload[key] = inp.checked ? '1' : '0';
+          } else {
+            if (inp.value !== '') payload[key] = inp.value;
+          }
+        });
+        if (Object.keys(payload).length) {
+          const resp = await fetch(baseUrl + '/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        }
+        modal.style.display = 'none';
+        pushMsg('assistant', 'Параметры применены', { className: 'local' });
+      } catch (e) {
+        pushMsg('assistant', 'Ошибка применения настроек: ' + (e?.message || String(e)));
+      }
+    });
   }
 });
 
@@ -444,64 +1028,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       if (chatEl) chatEl.innerHTML = '';
     }
     lastUrlInActiveTab = newUrl;
-  }
-});
-
-document.addEventListener('DOMContentLoaded', async () => {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    currentTabId = tab?.id;
-    lastUrlInActiveTab = tab?.url;
-  } catch (_) {}
-  const exportBtn = document.getElementById('exportBtn');
-  if (exportBtn) {
-    exportBtn.addEventListener('click', async () => {
-      const orig = exportBtn.textContent;
-      exportBtn.textContent = 'Экспортируется…';
-      exportBtn.disabled = true;
-      try { await exportCurrentPageToMarkdown(); }
-      finally {
-        exportBtn.textContent = orig;
-        exportBtn.disabled = false;
-      }
-    });
-  }
-  const settingsBtn = document.getElementById('settingsBtn');
-  const modal = document.getElementById('settingsModal');
-  const body = document.getElementById('settingsBody');
-  const btnCancel = document.getElementById('settingsCancel');
-  const btnSave = document.getElementById('settingsSave');
-  if (settingsBtn && modal && body && btnCancel && btnSave) {
-    settingsBtn.addEventListener('click', async () => {
-      try {
-        const baseUrl = await getBackendBaseUrl();
-        const resp = await fetch(baseUrl + '/config');
-        const cfg = await resp.json();
-        renderSettingsForm(body, cfg);
-        modal.style.display = 'block';
-      } catch (_) { modal.style.display = 'block'; }
-    });
-    btnCancel.addEventListener('click', () => { modal.style.display = 'none'; });
-    btnSave.addEventListener('click', async () => {
-      try {
-        const baseUrl = await getBackendBaseUrl();
-        const payload = {};
-        body.querySelectorAll('input[id^="cfg_"]').forEach(inp => {
-          const key = inp.id.replace('cfg_', '');
-          if (inp.type === 'checkbox') {
-            payload[key] = inp.checked ? '1' : '0';
-          } else {
-            if (inp.value !== '') payload[key] = inp.value;
-          }
-        });
-        const resp = await fetch(baseUrl + '/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        modal.style.display = 'none';
-        pushMsg('assistant', 'Параметры применены', { className: 'local' });
-      } catch (e) {
-        pushMsg('assistant', 'Ошибка применения настроек: ' + (e?.message || String(e)));
-      }
-    });
   }
 });
 

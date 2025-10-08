@@ -22,8 +22,8 @@ function pushMsg(role, text) {
 
 async function getBackendBaseUrl() {
   return new Promise(resolve => {
-    chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8010' }, (res) => {
-      resolve(res.backendBaseUrl.replace(/\/$/, ''));
+    chrome.storage.local.get({ backendBaseUrl: 'http://127.0.0.1:8090' }, (res) => {
+      resolve((res.backendBaseUrl || 'http://127.0.0.1:8090').replace(/\/$/, ''));
     });
   });
 }

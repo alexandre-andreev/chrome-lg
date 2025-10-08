@@ -23,7 +23,11 @@
     header { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(10,37,64,.12); }
     header .brand { font-weight: 600; letter-spacing: .3px; }
     header .actions { display: flex; gap: 8px; }
-    header .icon-btn { background: transparent; color: var(--muted); border: 1px solid rgba(10,37,64,.2); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
+    header .icon-btn { background: transparent; color: var(--muted); border: 1px solid rgba(10,37,64,.2); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 12px; transition: background-color .12s ease, transform .04s ease, color .12s ease; }
+    .icon-only { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; padding: 0; }
+    header .icon-btn:hover { background: rgba(10,37,64,.06); color: #0a2540; }
+    header .icon-btn:active { transform: translateY(1px); background: rgba(10,37,64,.12); }
+    header .icon-btn:disabled { opacity: .5; cursor: default; }
     .chat { flex: 1; overflow: auto; padding: 12px; }
     .msg { margin: 10px 0; padding: 10px 12px; border-radius: 10px; max-width: 92%; box-shadow: 0 4px 14px rgba(0,0,0,.08); white-space: pre-wrap; }
     .user { background: linear-gradient(135deg, var(--user-bg-1), var(--user-bg-2)); align-self: flex-end; border-top-right-radius: 4px; color: var(--user-text); }
@@ -41,16 +45,13 @@
 <body>
   <div class="wrap">
     <header>
-      <div class="actions" style="gap:12px; align-items:center">
-        <label style="display:flex; align-items:center; gap:6px; color: var(--muted); font-size:12px">
-          <input type="checkbox" id="forceSearchToggle" />
-          <span>Поиск</span>
-        </label>
-      </div>
+      <div class="brand">Chrome-bot</div>
       <div class="actions">
-        <button id="exportBtn" class="icon-btn" title="Выгрузить страницу в Markdown">Экспорт страницы</button>
-        <button id="settingsBtn" class="icon-btn" title="Настройки">Настройки</button>
-        <button id="copyBtn" class="icon-btn" title="Скопировать чат">Копировать чат</button>
+        <button id="ttsBtn" class="icon-btn icon-only" title="Озвучка (прочитать страницу)" aria-label="Озвучка">🔊</button>
+        <button id="sberTtsBtn" class="icon-btn icon-only" title="Озвучка (Sber)" aria-label="Озвучка (Sber)">🎙️</button>
+        <button id="exportBtn" class="icon-btn icon-only" title="Выгрузить в Markdown (файл)" aria-label="Экспорт в Markdown">⬇️</button>
+        <button id="copyMdBtn" class="icon-btn icon-only" title="Скопировать в буфер (Markdown)" aria-label="Копировать Markdown">📋</button>
+        <button id="settingsBtn" class="icon-btn icon-only" title="Настройки" aria-label="Настройки">⚙️</button>
       </div>
     </header>
     <div id="settingsModal" style="display:none; position: absolute; top: 48px; right: 12px; background: #fff; border: 1px solid rgba(10,37,64,.2); border-radius: 8px; padding: 12px; z-index: 1000; width: 320px; box-shadow: 0 8px 24px rgba(0,0,0,.15);">

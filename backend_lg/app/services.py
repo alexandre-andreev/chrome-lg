@@ -3,6 +3,7 @@ import logging
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 from dotenv import load_dotenv
 from .langfuse_tracer import trace_gemini_call, trace_exa_search
@@ -86,6 +87,141 @@ if EXA_API_KEY:
 else:
     logger.warning("EXA_API_KEY is not set")
 
+
+# ===================== SBER TTS (OAuth NGW + SmartSpeech) =====================
+SBER_TTS_ENABLED = (os.getenv("SBER_TTS_ENABLED", "0").lower() in ("1", "true", "yes"))
+SBER_KEY = os.getenv("SBER_KEY")  # Authorization key (Base64 client_id:client_secret)
+
+_SBER_OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+_SBER_TTS_REST_URL = "https://smartspeech.sber.ru/rest/v1/text:synthesize"
+
+class _SberTokenManager:
+    def __init__(self) -> None:
+        self.access_token: Optional[str] = None
+        self.expires_at_ms: int = 0
+
+    def _now_ms(self) -> int:
+        return int(time.time() * 1000)
+
+    def is_valid(self) -> bool:
+        # consider token valid if at least 60s remain
+        return bool(self.access_token) and (self._now_ms() + 60_000) < self.expires_at_ms
+
+    def fetch(self) -> bool:
+        if not SBER_KEY:
+            logger.warning("SBER TTS: SBER_KEY not set; cannot obtain token")
+            return False
+        try:
+            rq = str(uuid.uuid4())
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                "RqUID": rq,
+                "Authorization": f"Basic {SBER_KEY}",
+            }
+            verify_ssl = (os.getenv("SBER_TTS_VERIFY", "1").lower() in ("1", "true", "yes"))
+            # Bypass proxies/VPN env for this call
+            sess = requests.Session()
+            sess.trust_env = False
+            resp = sess.post(
+                _SBER_OAUTH_URL,
+                headers=headers,
+                data={"scope": "SALUTE_SPEECH_PERS"},
+                timeout=10,
+                proxies={"http": None, "https": None},
+                verify=verify_ssl,
+            )
+            if resp.status_code != 200:
+                logger.error("SBER OAuth: ошибка HTTP %s %s", resp.status_code, resp.text[:200])
+                return False
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            token = data.get("access_token") or data.get("accessToken")
+            exp = int(data.get("expires_at") or data.get("expiresAt") or 0)
+            if not token:
+                logger.error("SBER OAuth: в ответе отсутствует access_token")
+                return False
+            self.access_token = token
+            # If expires_at not provided, fallback to 25 minutes from now
+            if exp <= 0:
+                exp = self._now_ms() + 25 * 60 * 1000
+            self.expires_at_ms = int(exp)
+            ttl_s = max(0, (self.expires_at_ms - self._now_ms()) // 1000)
+            logger.info("SBER OAuth: токен получен, время жизни %s c", ttl_s)
+            return True
+        except Exception as e:
+            logger.exception("SBER OAuth: исключение при получении токена: %s", e)
+            return False
+
+    def get(self) -> Optional[str]:
+        if self.is_valid():
+            return self.access_token
+        ok = self.fetch()
+        return self.access_token if ok else None
+
+_sber_token = _SberTokenManager()
+
+
+def sber_tts_synthesize(text: str, *, voice: Optional[str] = None, audio_encoding: Optional[str] = None, language: Optional[str] = None) -> Tuple[bytes, str]:
+    """Synthesize speech using Sber SmartSpeech REST endpoint.
+    Returns (audio_bytes, mime_type). Raises on failure.
+    """
+    if not SBER_TTS_ENABLED:
+        raise RuntimeError("SBER TTS disabled")
+    if not text or not text.strip():
+        return b"", "audio/ogg"
+    token = _sber_token.get()
+    if not token:
+        raise RuntimeError("SBER OAuth token not available")
+    voice = voice or os.getenv("SBER_TTS_VOICE", "Nec_24000")
+    audio_encoding = (audio_encoding or os.getenv("SBER_TTS_FORMAT", "opus")).lower()
+    language = language or os.getenv("SBER_TTS_LANG", "ru-RU")
+    # Build request: REST expects raw text body and Content-Type application/text (or application/ssml)
+    # Extra parameters are passed via query string
+    params = {
+        "voice": voice,
+        "audio_encoding": audio_encoding,
+        "language": language,
+    }
+    rq = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "*/*",
+        "Content-Type": "application/text",
+        "RqUID": rq,
+    }
+    # Bypass proxies for Sber endpoint
+    sess = requests.Session()
+    sess.trust_env = False
+    verify_ssl = (os.getenv("SBER_TTS_VERIFY", "1").lower() in ("1", "true", "yes"))
+    resp = sess.post(
+        _SBER_TTS_REST_URL,
+        headers=headers,
+        params=params,
+        data=(text or ""),
+        timeout=30,
+        proxies={"http": None, "https": None},
+        verify=verify_ssl,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"SBER TTS failed: HTTP {resp.status_code} {resp.text[:200]}")
+    content_type = resp.headers.get("content-type", "application/octet-stream")
+    data = resp.content if resp.content else b""
+    logger.info("SBER TTS: голос=%s формат=%s вход=%d символов ответ=%d байт", voice, audio_encoding, len(text or ""), len(data))
+    return data, content_type
+
+
+def sber_token_warmup() -> bool:
+    """Fetch Sber OAuth token on startup (logs result). Returns True on success."""
+    if not SBER_TTS_ENABLED:
+        return False
+    ok = _sber_token.fetch()
+    if not ok:
+        logger.error("SBER OAuth: инициализация при старте — ОШИБКА")
+    return ok
+
+
+def sber_is_enabled() -> bool:
+    return SBER_TTS_ENABLED and bool(SBER_KEY)
 
 SYSTEM_INSTRUCTION = (
     "Ты — умный ассистент, специализируешься на анализе веб-страниц в браузере. "
